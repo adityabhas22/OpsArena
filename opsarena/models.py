@@ -372,6 +372,28 @@ class TriggerReverificationAction(Action):
     notes: str | None = None
 
 
+class SendToQAAction(Action):
+    action_type: Literal["send_to_qa"] = "send_to_qa"
+    case_id: str
+    assignee_type: str | None = None
+    notes: str | None = None
+
+
+class ApproveQAAction(Action):
+    action_type: Literal["approve_qa"] = "approve_qa"
+    case_id: str
+    assignee_type: str | None = None
+    notes: str | None = None
+
+
+class FailQAAction(Action):
+    action_type: Literal["fail_qa"] = "fail_qa"
+    case_id: str
+    reason_code: ReasonCode
+    assignee_type: str | None = None
+    notes: str | None = None
+
+
 class AdvanceClockAction(Action):
     action_type: Literal["advance_clock"] = "advance_clock"
     minutes: int = Field(..., ge=1, le=480)
@@ -423,6 +445,9 @@ OpsAction = Annotated[
         | SendForSecondaryApprovalAction
         | ReviewKYCAction
         | TriggerReverificationAction
+        | SendToQAAction
+        | ApproveQAAction
+        | FailQAAction
         | AdvanceClockAction
         | CloseCaseAction
         | ReopenCaseAction

@@ -1494,6 +1494,21 @@ def compute_cashflow_cascade(
     return breakdown
 
 
+def compute_qa_cascade(
+    qa_passed: bool,
+    qa_required: bool,
+    rework_count: int,
+) -> dict[str, float]:
+    breakdown: dict[str, float] = {}
+    if qa_passed:
+        score = 2.0 + (1.0 if qa_required else 0.0) - min(2.0, 0.5 * max(0, rework_count - 1))
+        breakdown["qa_cascade"] = score
+    else:
+        breakdown["qa_cascade"] = -4.0 - min(3.0, 1.5 * rework_count)
+    breakdown["total"] = breakdown["qa_cascade"]
+    return breakdown
+
+
 # ============================================================================
 # SECTION 7: COMBINED REWARD ORCHESTRATOR
 # ============================================================================
@@ -1626,6 +1641,20 @@ def compute_step_reward(
             result.cascade_rewards["cashflow"] = compute_cashflow_cascade(
                 duplicate_amount_approved=case.amount,
             )
+
+    if action_type == "approve_qa":
+        result.cascade_rewards["qa"] = compute_qa_cascade(
+            qa_passed=True,
+            qa_required=bool(_case_attr(case, "qa_required", False)),
+            rework_count=len(getattr(case, "qa_history", [])),
+        )
+
+    if action_type == "fail_qa":
+        result.cascade_rewards["qa"] = compute_qa_cascade(
+            qa_passed=False,
+            qa_required=bool(_case_attr(case, "qa_required", False)),
+            rework_count=len(getattr(case, "qa_history", [])),
+        )
 
     result.compute_totals()
     return result

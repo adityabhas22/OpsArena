@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from opsarena.documents import GoodsReceipt, ReceiptLineItem
-from opsarena.domain.core import ApprovalHistoryEntry, MessageLogEntry, RouteHistoryEntry
+from opsarena.domain.core import ApprovalHistoryEntry, MessageLogEntry, QAReviewEntry, QAStatus, RouteHistoryEntry
 from opsarena.domain.events import (
     ChargebackEvent,
     FollowUpDueEvent,
     InfoResponseEvent,
+    ReworkDueEvent,
     ReopenEvent,
     SecondaryApprovalDecisionEvent,
 )
@@ -48,10 +49,19 @@ from opsarena.models import (
     RouteCaseAction,
     ScheduleFollowUpAction,
     SearchCasesAction,
+    SendToQAAction,
+    ApproveQAAction,
+    FailQAAction,
     SendMessageAction,
     SendForSecondaryApprovalAction,
     ViewRecordAction,
 )
+
+
+def _clear_qa_rework(case) -> None:
+    case.rework_due_at = None
+    case.qa_rework_overdue = False
+    case.visible_flags = [flag for flag in case.visible_flags if flag != "qa_rework_overdue"]
 
 
 def handle_list_queue(state: WorldState, action: ListQueueAction) -> tuple[TransitionResult, None]:
@@ -66,7 +76,7 @@ def handle_search_cases(state: WorldState, action: SearchCasesAction) -> tuple[T
 def handle_open_case(state: WorldState, action: OpenCaseAction):
     case = require_case(state, action.case_id)
     state.current_case_id = case.case_id
-    case.status = "in_progress" if case.status == "open" else case.status
+    case.status = "in_progress" if case.status in {"open", "reopened", "rework"} else case.status
     return TransitionResult(True, f"Opened {case.case_id}"), case
 
 
@@ -310,10 +320,89 @@ def handle_resume_sla(state: WorldState, action: ResumeSLAAction):
     return TransitionResult(True, f"SLA resumed for {case.case_id}"), case
 
 
+def handle_send_to_qa(state: WorldState, action: SendToQAAction):
+    case = require_case(state, action.case_id)
+    if case.resolution == Resolution.PENDING:
+        raise ValueError("case_not_ready_for_qa")
+    if case.status == "closed":
+        raise ValueError("closed_case_cannot_enter_qa")
+    if case.qa_status == QAStatus.PENDING:
+        raise ValueError("qa_already_pending")
+    case.qa_status = QAStatus.PENDING
+    case.qa_owner = action.assignee_type or "qa_queue"
+    case.status = "pending_qa"
+    _clear_qa_rework(case)
+    case.qa_history.append(
+        QAReviewEntry(
+            at_time=state.current_time,
+            status=QAStatus.PENDING,
+            owner=case.qa_owner,
+            notes=action.notes,
+        )
+    )
+    state.metrics.qa_reviews_requested += 1
+    return TransitionResult(True, f"Sent {case.case_id} to QA"), case
+
+
+def handle_approve_qa(state: WorldState, action: ApproveQAAction):
+    case = require_case(state, action.case_id)
+    if case.qa_status != QAStatus.PENDING:
+        raise ValueError("qa_not_pending")
+    owner = action.assignee_type or case.qa_owner or "qa_queue"
+    case.qa_status = QAStatus.PASSED
+    case.qa_owner = owner
+    case.status = "resolved"
+    _clear_qa_rework(case)
+    case.qa_history.append(
+        QAReviewEntry(
+            at_time=state.current_time,
+            status=QAStatus.PASSED,
+            owner=owner,
+            notes=action.notes,
+        )
+    )
+    state.metrics.qa_reviews_passed += 1
+    return TransitionResult(True, f"QA approved {case.case_id}"), case
+
+
+def handle_fail_qa(state: WorldState, action: FailQAAction):
+    case = require_case(state, action.case_id)
+    if case.qa_status != QAStatus.PENDING:
+        raise ValueError("qa_not_pending")
+    owner = action.assignee_type or case.qa_owner or "qa_queue"
+    case.qa_status = QAStatus.FAILED
+    case.qa_owner = owner
+    case.status = "rework"
+    case.resolution = Resolution.PENDING
+    case.rework_due_at = state.current_time + (case.hidden.hidden_follow_up_latency_minutes or 30)
+    case.qa_rework_overdue = False
+    case.visible_flags = list(dict.fromkeys(case.visible_flags + ["qa_rework"]))
+    case.qa_history.append(
+        QAReviewEntry(
+            at_time=state.current_time,
+            status=QAStatus.FAILED,
+            owner=owner,
+            reason=action.reason_code.value,
+            notes=action.notes,
+        )
+    )
+    schedule_event(
+        state,
+        ReworkDueEvent(
+            at_time=case.rework_due_at,
+            case_id=case.case_id,
+            scheduled_for=case.rework_due_at,
+        ),
+    )
+    state.metrics.qa_reviews_failed += 1
+    return TransitionResult(True, f"QA failed {case.case_id}"), case
+
+
 def handle_escalate(state: WorldState, action: EscalateAction):
     case = require_case(state, action.case_id)
     if action.target_queue not in case.allowed_escalation_queues:
         raise ValueError("invalid_escalation_target")
+    _clear_qa_rework(case)
     case.resolution = Resolution.ESCALATED
     case.status = "escalated"
     case.escalation_justified = True
@@ -325,6 +414,7 @@ def handle_escalate(state: WorldState, action: EscalateAction):
 
 def handle_defer(state: WorldState, action: DeferAction):
     case = require_case(state, action.case_id)
+    _clear_qa_rework(case)
     case.resolution = Resolution.DEFERRED
     case.status = "pending_info"
     return TransitionResult(True, f"Deferred {case.case_id}"), case
@@ -380,6 +470,7 @@ def handle_approve(state: WorldState, action: ApproveAction):
             raise ValueError("secondary_approval_required")
         if workflow.credit_memo_status.value == "requested":
             raise ValueError("credit_memo_pending")
+    _clear_qa_rework(case)
     case.resolution = Resolution.APPROVED
     case.status = "resolved"
     if case.case_type == CaseType.KYC and not require_kyc_workflow(case).kyc_complete:
@@ -393,6 +484,7 @@ def handle_approve(state: WorldState, action: ApproveAction):
 
 def handle_reject(state: WorldState, action: RejectAction):
     case = require_case(state, action.case_id)
+    _clear_qa_rework(case)
     case.resolution = Resolution.REJECTED
     case.status = "resolved"
     return TransitionResult(True, f"Rejected {case.case_id}"), case

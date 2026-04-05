@@ -56,6 +56,11 @@ class FollowUpDueEvent(BaseScheduledEvent):
     reason_code: ReasonCode
 
 
+class ReworkDueEvent(BaseScheduledEvent):
+    event_type: Literal["rework_due"] = "rework_due"
+    scheduled_for: int
+
+
 ScheduledEvent = Annotated[
     InfoResponseEvent
     | ChargebackEvent
@@ -64,6 +69,7 @@ ScheduledEvent = Annotated[
     | DisputeOutcomeEvent
     | VendorCreditMemoReceivedEvent
     | SecondaryApprovalDecisionEvent
-    | FollowUpDueEvent,
+    | FollowUpDueEvent
+    | ReworkDueEvent,
     Field(discriminator="event_type"),
 ]

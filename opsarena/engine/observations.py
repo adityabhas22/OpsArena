@@ -39,6 +39,21 @@ def _workflow_metadata(case: CaseState) -> dict[str, Any]:
         "route_history": [entry.model_dump() for entry in case.route_history],
         "sla_paused_at": case.sla_paused_at,
         "sla_pause_reason": case.sla_pause_reason,
+        "qa_status": case.qa_status.value,
+        "qa_owner": case.qa_owner,
+        "qa_required": case.qa_required,
+        "qa_history": [
+            {
+                "at_time": entry.at_time,
+                "status": entry.status.value,
+                "owner": entry.owner,
+                "reason": entry.reason,
+                "notes": entry.notes,
+            }
+            for entry in case.qa_history
+        ],
+        "rework_due_at": case.rework_due_at,
+        "qa_rework_overdue": case.qa_rework_overdue,
         **case.workflow.public_metadata(),
     }
     if case.pending_info_fields:
@@ -217,8 +232,12 @@ def render_observation(
             "queue_metrics": state.queue_state().model_dump(
                 include={
                     "oldest_open_case_age_minutes",
+                    "queue_backlog_age_minutes",
                     "overdue_follow_ups",
                     "claimed_case_count",
+                    "unassigned_count",
+                    "exception_queue_size",
+                    "agent_capacity",
                     "total_cases_resolved",
                     "total_sla_breaches",
                 }

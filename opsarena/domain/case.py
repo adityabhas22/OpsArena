@@ -4,7 +4,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from opsarena.domain.core import LinkedRecord, MessageLogEntry, RouteHistoryEntry
+from opsarena.domain.core import LinkedRecord, MessageLogEntry, QAReviewEntry, QAStatus, RouteHistoryEntry
 from opsarena.domain.hidden import CaseHiddenState
 from opsarena.domain.workflows.invoice import InvoiceWorkflowState
 from opsarena.domain.workflows.kyc import KYCWorkflowState
@@ -68,6 +68,12 @@ class CaseState(BaseModel):
     next_touch_at: int | None = None
     waiting_reason: str | None = None
     follow_up_overdue: bool = False
+    qa_status: QAStatus = QAStatus.NOT_REQUESTED
+    qa_owner: str | None = None
+    qa_required: bool = False
+    qa_history: list[QAReviewEntry] = Field(default_factory=list)
+    rework_due_at: int | None = None
+    qa_rework_overdue: bool = False
     last_touched_at: int | None = None
     hidden: CaseHiddenState = Field(default_factory=CaseHiddenState)
     workflow: WorkflowState

@@ -61,6 +61,7 @@ def _base_state(task_id: TaskId, seed: int, episode_id: str | None = None) -> Wo
             "approval_queue_capacity": 1,
             "approval_queue_load": 0,
             "claim_capacity": 2,
+            "agent_capacity": 2,
             "max_steps": 40,
         },
     )
@@ -454,6 +455,9 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
                 invoice_case.visible_summary = "Invoice variance likely needs credit memo and secondary approval"
                 invoice_case.workflow.match_status = MatchStatus.VARIANCE
                 invoice_case.workflow.variance_amount = 24.5
+            else:
+                invoice_case.qa_required = True
+                invoice_case.visible_flags = list(dict.fromkeys(invoice_case.visible_flags + ["qa_required"]))
             triage_cases.append(invoice_case)
             combined.invoices.update(records.invoices)
             combined.purchase_orders.update(records.purchase_orders)

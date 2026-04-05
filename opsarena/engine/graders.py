@@ -59,6 +59,8 @@ def grade_trajectory(state: WorldState) -> float:
         "request_info_limit": 1.0,
         "secondary_approval_before_approve": 1.0,
         "follow_up_discipline": 1.0,
+        "qa_before_close": 1.0,
+        "qa_rework_discipline": 1.0,
     }
     for case in state.cases.values():
         events = [entry.action_type for entry in audit if entry.case_id == case.case_id]
@@ -81,6 +83,10 @@ def grade_trajectory(state: WorldState) -> float:
             checks["secondary_approval_before_approve"] = 0.0
         if case.follow_up_overdue or state.metrics.follow_ups_overdue > 0:
             checks["follow_up_discipline"] = 0.0
+        if case.qa_required and case.status == "closed" and "approve_qa" not in events:
+            checks["qa_before_close"] = 0.0
+        if case.qa_rework_overdue or state.metrics.qa_rework_overdue > 0:
+            checks["qa_rework_discipline"] = 0.0
     return sum(checks.values()) / len(checks)
 
 
@@ -105,11 +111,12 @@ def grade_efficiency(state: WorldState) -> float:
     sla_score = sum(1 for case in cases if case.status == "closed" and state.current_time <= case.sla_deadline) / len(cases)
     step_score = max(0.0, 1.0 - max(0, state.step_count - len(cases) * 8) / max(1, len(cases) * 20))
     follow_up_score = max(0.0, 1.0 - state.metrics.follow_ups_overdue / max(1, len(cases)))
+    qa_score = max(0.0, 1.0 - (state.metrics.qa_reviews_failed + state.metrics.qa_rework_overdue) / max(1, len(cases) * 2))
     if state.task_id == TaskId.QUEUE_TRIAGE:
         optimal_order = [case.case_id for case in sorted(cases, key=lambda item: (item.priority, item.sla_deadline))]
         tau = max(0.0, _kendall_tau([entry.case_id for entry in state.audit_log if entry.case_id], optimal_order))
-        return (sla_score + step_score + tau + follow_up_score) / 4
-    return (sla_score + step_score + follow_up_score) / 3
+        return (sla_score + step_score + tau + follow_up_score + qa_score) / 5
+    return (sla_score + step_score + follow_up_score + qa_score) / 4
 
 
 def grade_episode(state: WorldState) -> dict:

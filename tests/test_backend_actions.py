@@ -4,9 +4,11 @@ from opsarena.enums import MatchStatus, ReasonCode, TargetQueue, VerificationDec
 from opsarena.models import (
     AcceptDisputeAction,
     AdvanceClockAction,
+    ApproveQAAction,
     ApproveAction,
     ClaimCaseAction,
     ExecuteRefundAction,
+    FailQAAction,
     OpenCaseAction,
     PauseSLAAction,
     PlacePaymentHoldAction,
@@ -18,6 +20,7 @@ from opsarena.models import (
     ReviewKYCAction,
     RouteCaseAction,
     ScheduleFollowUpAction,
+    SendToQAAction,
     SendForSecondaryApprovalAction,
     SubmitDisputeEvidenceAction,
     TriggerReverificationAction,
@@ -219,3 +222,42 @@ def test_credit_memo_and_secondary_approval_workflow_adds_records():
     env.step(ReleasePaymentHoldAction(case_id="case_invoice_2"))
     final = env.step(ApproveAction(case_id="case_invoice_2"))
     assert final.error is None
+
+
+def test_qa_failure_reopens_case_for_rework_and_blocks_close():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(OpenCaseAction(case_id="case_invoice_2"))
+    env.step(
+        RecordThreeWayMatchAction(
+            case_id="case_invoice_2",
+            match_status=MatchStatus.MATCHED,
+        )
+    )
+    env.step(SendForSecondaryApprovalAction(case_id="case_invoice_2", reason_code=ReasonCode.THRESHOLD_EXCEEDED))
+    env.step(AdvanceClockAction(minutes=15))
+    env.step(ApproveAction(case_id="case_invoice_2"))
+
+    sent = env.step(SendToQAAction(case_id="case_invoice_2", assignee_type="qa_reviewer"))
+    assert sent.case_detail is not None
+    assert sent.case_detail.workflow_metadata["qa_status"] == "pending"
+
+    failed = env.step(
+        FailQAAction(
+            case_id="case_invoice_2",
+            assignee_type="qa_reviewer",
+            reason_code=ReasonCode.MISSING_DOCUMENTATION,
+        )
+    )
+    assert failed.case_detail is not None
+    assert failed.case_detail.status == "rework"
+    assert env._state.cases["case_invoice_2"].resolution.value == "pending"
+
+    env.step(AdvanceClockAction(minutes=env._state.cases["case_invoice_2"].hidden.hidden_follow_up_latency_minutes or 30))
+    assert env._state.cases["case_invoice_2"].qa_rework_overdue is True
+
+    env.step(ApproveAction(case_id="case_invoice_2"))
+    env.step(SendToQAAction(case_id="case_invoice_2", assignee_type="qa_reviewer"))
+    approved = env.step(ApproveQAAction(case_id="case_invoice_2", assignee_type="qa_reviewer"))
+    assert approved.case_detail is not None
+    assert approved.case_detail.workflow_metadata["qa_status"] == "passed"

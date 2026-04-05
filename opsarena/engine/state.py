@@ -45,6 +45,10 @@ class EpisodeMetrics(BaseModel):
     disputes_accepted: int = 0
     credit_memos_requested: int = 0
     secondary_approvals_requested: int = 0
+    qa_reviews_requested: int = 0
+    qa_reviews_passed: int = 0
+    qa_reviews_failed: int = 0
+    qa_rework_overdue: int = 0
 
 
 class RecordStore(BaseModel):
@@ -70,8 +74,12 @@ class QueueState(BaseModel):
     total_cases_resolved: int = 0
     total_sla_breaches: int = 0
     oldest_open_case_age_minutes: int = 0
+    queue_backlog_age_minutes: int = 0
     overdue_follow_ups: int = 0
     claimed_case_count: int = 0
+    unassigned_count: int = 0
+    exception_queue_size: int = 0
+    agent_capacity: int = 0
 
 
 class WorldState(BaseModel):
@@ -110,8 +118,15 @@ class WorldState(BaseModel):
                 (self.current_time - case.created_at for case in open_cases),
                 default=0,
             ),
+            queue_backlog_age_minutes=max(
+                (self.current_time - case.created_at for case in open_cases),
+                default=0,
+            ),
             overdue_follow_ups=sum(1 for case in open_cases if case.follow_up_overdue),
             claimed_case_count=sum(1 for case in open_cases if case.claimed_by is not None),
+            unassigned_count=sum(1 for case in open_cases if case.claimed_by is None and case.current_owner in {"queue", "ops_agent"}),
+            exception_queue_size=len(open_cases),
+            agent_capacity=self.metadata.get("agent_capacity", self.metadata.get("claim_capacity", 2)),
         )
 
     def open_cases(self) -> list[CaseState]:

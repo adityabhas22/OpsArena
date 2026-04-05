@@ -1,5 +1,5 @@
 from .case import CaseState, WorkflowState
-from .core import AuditEntry, LinkedRecord, MessageLogEntry, RouteHistoryEntry
+from .core import AuditEntry, LinkedRecord, MessageLogEntry, QAReviewEntry, QAStatus, RouteHistoryEntry
 from .events import ScheduledEvent
 from .hidden import CaseHiddenState
 from .workflows.invoice import (
@@ -25,6 +25,8 @@ __all__ = [
     "KYCWorkflowState",
     "LinkedRecord",
     "MessageLogEntry",
+    "QAReviewEntry",
+    "QAStatus",
     "RefundWorkflowState",
     "RouteHistoryEntry",
     "ScheduledEvent",

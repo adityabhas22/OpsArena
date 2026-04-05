@@ -10,6 +10,7 @@ from .models import (
     DeferAction,
     EscalateAction,
     ExecuteRefundAction,
+    FailQAAction,
     InspectAuditAction,
     ListQueueAction,
     LogInternalNoteAction,
@@ -33,11 +34,13 @@ from .models import (
     RouteCaseAction,
     ScheduleFollowUpAction,
     SearchCasesAction,
+    SendToQAAction,
     SendForSecondaryApprovalAction,
     SendMessageAction,
     SubmitDisputeEvidenceAction,
     TriggerReverificationAction,
     ViewRecordAction,
+    ApproveQAAction,
 )
 
 __all__ = [
@@ -51,6 +54,7 @@ __all__ = [
     "DeferAction",
     "EscalateAction",
     "ExecuteRefundAction",
+    "FailQAAction",
     "InspectAuditAction",
     "ListQueueAction",
     "LogInternalNoteAction",
@@ -75,9 +79,11 @@ __all__ = [
     "RouteCaseAction",
     "ScheduleFollowUpAction",
     "SearchCasesAction",
+    "SendToQAAction",
     "SendForSecondaryApprovalAction",
     "SendMessageAction",
     "SubmitDisputeEvidenceAction",
     "TriggerReverificationAction",
     "ViewRecordAction",
+    "ApproveQAAction",
 ]

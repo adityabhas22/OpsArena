@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from opsarena.documents import CreditMemoRecord
-from opsarena.domain.core import ApprovalHistoryEntry
+from opsarena.domain.core import ApprovalHistoryEntry, QAStatus
 from opsarena.domain.events import (
     ChargebackEvent,
     DisputeOutcomeEvent,
     FollowUpDueEvent,
     InfoResponseEvent,
+    ReworkDueEvent,
     ReopenEvent,
     SLABreachEvent,
     ScheduledEvent,
@@ -143,6 +144,13 @@ def process_due_events(state: WorldState) -> list[str]:
                     case.visible_flags.append("follow_up_overdue")
                 state.metrics.follow_ups_overdue += 1
                 messages.append(f"Follow-up overdue for {case.case_id}")
+        elif isinstance(event, ReworkDueEvent):
+            if case.status != "closed" and case.rework_due_at == event.scheduled_for and case.qa_status == QAStatus.FAILED:
+                case.qa_rework_overdue = True
+                if "qa_rework_overdue" not in case.visible_flags:
+                    case.visible_flags.append("qa_rework_overdue")
+                state.metrics.qa_rework_overdue += 1
+                messages.append(f"QA rework overdue for {case.case_id}")
         elif isinstance(event, ReopenEvent):
             case.status = "reopened"
             state.metrics.reopens += 1

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -42,3 +43,18 @@ class ApprovalHistoryEntry(BaseModel):
     owner: str
     reason: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class QAStatus(StrEnum):
+    NOT_REQUESTED = "not_requested"
+    PENDING = "pending"
+    PASSED = "passed"
+    FAILED = "failed"
+
+
+class QAReviewEntry(BaseModel):
+    at_time: int
+    status: QAStatus
+    owner: str
+    reason: str | None = None
+    notes: str | None = None

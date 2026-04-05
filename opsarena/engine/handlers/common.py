@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from opsarena.domain.case import CaseState
+from opsarena.domain.core import QAStatus
 from opsarena.domain.workflows.invoice import InvoiceWorkflowState
 from opsarena.domain.workflows.kyc import KYCWorkflowState
 from opsarena.domain.workflows.refund import RefundWorkflowState
@@ -64,6 +65,10 @@ def touch_case(case: CaseState, current_time: int) -> None:
     if case.follow_up_overdue:
         case.follow_up_overdue = False
         case.visible_flags = [flag for flag in case.visible_flags if flag != "follow_up_overdue"]
+    if case.qa_rework_overdue:
+        case.qa_rework_overdue = False
+        case.rework_due_at = None
+        case.visible_flags = [flag for flag in case.visible_flags if flag != "qa_rework_overdue"]
     if case.next_touch_at is not None and current_time >= case.next_touch_at:
         case.next_touch_at = None
         case.waiting_reason = None
@@ -97,6 +102,10 @@ def can_close(case: CaseState) -> tuple[bool, str]:
         return False, "follow up still scheduled"
     if case.follow_up_overdue:
         return False, "follow up overdue"
+    if case.qa_status == QAStatus.PENDING:
+        return False, "qa review pending"
+    if case.qa_required and case.qa_status != QAStatus.PASSED:
+        return False, "qa approval missing"
     if case.requires_customer_notification and not case.customer_notified:
         return False, "customer notification missing"
     if case.case_type == CaseType.KYC and case.resolution == Resolution.APPROVED and not require_kyc_workflow(case).kyc_complete:

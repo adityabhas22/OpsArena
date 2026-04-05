@@ -4,9 +4,11 @@ from opsarena.models import (
     AdvanceClockAction,
     ApproveAction,
     CloseCaseAction,
+    FailQAAction,
     OpenCaseAction,
     QueryPolicyAction,
     ScheduleFollowUpAction,
+    SendToQAAction,
     SendForSecondaryApprovalAction,
     SendMessageAction,
 )
@@ -43,3 +45,16 @@ def test_grader_penalizes_overdue_follow_up_and_missing_secondary_approval():
     env.step(QueryPolicyAction(policy_id="invoice_policy"))
     pending = env.step(SendForSecondaryApprovalAction(case_id="case_invoice_1", reason_code="threshold_exceeded"))
     assert pending.error is None
+
+
+def test_grader_penalizes_failed_qa_rework():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(OpenCaseAction(case_id="case_invoice_2"))
+    env.step(SendForSecondaryApprovalAction(case_id="case_invoice_2", reason_code="threshold_exceeded"))
+    env.step(AdvanceClockAction(minutes=15))
+    env.step(ApproveAction(case_id="case_invoice_2"))
+    env.step(SendToQAAction(case_id="case_invoice_2", assignee_type="qa_reviewer"))
+    env.step(FailQAAction(case_id="case_invoice_2", assignee_type="qa_reviewer", reason_code="missing_documentation"))
+    env.step(AdvanceClockAction(minutes=env._state.cases["case_invoice_2"].hidden.hidden_follow_up_latency_minutes or 30))
+    assert grade_trajectory(env._state) < 1.0

@@ -7,8 +7,10 @@ from server.environment import OpsArenaEnvironment
 from opsarena.models import (
     AcceptDisputeAction,
     AdvanceClockAction,
+    ApproveQAAction,
     ApproveAction,
     CloseCaseAction,
+    SendToQAAction,
     OpenCaseAction,
     QueryPolicyAction,
     RejectAction,
@@ -38,6 +40,9 @@ def run_oracle(task_id: str, seed: int = 7) -> dict:
                 env.step(QueryPolicyAction(policy_id="refund_policy"))
                 env.step(ApproveAction(case_id=case_id))
             env.step(SendMessageAction(case_id=case_id, template_id="refund_approved", slots={"amount": str(case.amount), "order_id": case.linked_records[0].record_id}))
+            if env._state.cases[case_id].qa_required:
+                env.step(SendToQAAction(case_id=case_id, assignee_type="qa_reviewer"))
+                env.step(ApproveQAAction(case_id=case_id, assignee_type="qa_reviewer"))
             env.step(CloseCaseAction(case_id=case_id, resolution_code="oracle_complete"))
         elif case.case_type.value == "invoice":
             workflow = case.workflow
@@ -61,6 +66,9 @@ def run_oracle(task_id: str, seed: int = 7) -> dict:
                 if invoice_workflow.payment_hold:
                     env.step(ReleasePaymentHoldAction(case_id=case_id))
                 env.step(ApproveAction(case_id=case_id))
+            if env._state.cases[case_id].qa_required:
+                env.step(SendToQAAction(case_id=case_id, assignee_type="qa_reviewer"))
+                env.step(ApproveQAAction(case_id=case_id, assignee_type="qa_reviewer"))
             env.step(CloseCaseAction(case_id=case_id, resolution_code="oracle_complete"))
         else:
             workflow = case.workflow
@@ -74,5 +82,8 @@ def run_oracle(task_id: str, seed: int = 7) -> dict:
                     env.step(AdvanceClockAction(minutes=case.hidden.hidden_response_latency_minutes or 45))
                 env.step(ViewRecordAction(record_type="kyc_document", record_id=case.linked_records[-1].record_id))
                 env.step(ApproveAction(case_id=case_id))
+            if env._state.cases[case_id].qa_required:
+                env.step(SendToQAAction(case_id=case_id, assignee_type="qa_reviewer"))
+                env.step(ApproveQAAction(case_id=case_id, assignee_type="qa_reviewer"))
             env.step(CloseCaseAction(case_id=case_id, resolution_code="oracle_complete"))
     return env.state.model_dump()
