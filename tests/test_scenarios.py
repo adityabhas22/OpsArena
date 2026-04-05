@@ -19,6 +19,7 @@ def test_queue_triage_seed_contains_richer_workflow_metadata():
     state = build_task_state("queue_triage", seed=7)
     assert state.metadata["claim_capacity"] == 2
     assert state.metadata["agent_capacity"] == 2
+    assert state.metadata["staffing_status"] == "normal"
     refund_workflow = state.cases["case_refund_2"].workflow
     invoice_workflow = state.cases["case_invoice_1"].workflow
     assert isinstance(refund_workflow, RefundWorkflowState)
@@ -26,3 +27,7 @@ def test_queue_triage_seed_contains_richer_workflow_metadata():
     assert refund_workflow.dispute_stage == DisputeStage.INQUIRY
     assert invoice_workflow.match_status.value == "variance"
     assert state.cases["case_invoice_2"].qa_required is True
+    assert state.cases["case_refund_1"].hidden.qa_sample_on_close is True
+    scheduled_event_types = {event.event_type for event in state.scheduled_events}
+    assert "arrival_wave" in scheduled_event_types
+    assert "staffing_drop" in scheduled_event_types

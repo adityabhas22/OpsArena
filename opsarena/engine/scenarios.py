@@ -24,6 +24,7 @@ from opsarena.documents import (
     ShippingRecord,
 )
 from opsarena.domain.core import LinkedRecord
+from opsarena.domain.events import ArrivalWaveEvent, ArrivalWaveRecordBundle, StaffingDropEvent
 from opsarena.domain.hidden import CaseHiddenState
 from opsarena.domain.workflows.invoice import (
     ApprovalDecision,
@@ -92,6 +93,60 @@ def _add_shared_templates(records: RecordStore) -> None:
         body_template="Your case {case_id} is closed with resolution {resolution}.",
         required_slots=["case_id", "resolution"],
     )
+
+
+def _rename_refund_bundle(case: CaseState, records: RecordStore, suffix: str) -> tuple[CaseState, RecordStore]:
+    customer = next(iter(records.customers.values()))
+    order = next(iter(records.orders.values()))
+    shipping = next(iter(records.shipping.values()))
+    payment = next(iter(records.payments.values()))
+    dispute = next(iter(records.disputes.values()))
+
+    customer = customer.model_copy(update={"customer_id": f"{customer.customer_id}_{suffix}"})
+    order = order.model_copy(
+        update={
+            "order_id": f"{order.order_id}_{suffix}",
+            "customer_id": customer.customer_id,
+        }
+    )
+    shipping = shipping.model_copy(update={"shipment_id": f"{shipping.shipment_id}_{suffix}", "order_id": order.order_id})
+    payment = payment.model_copy(update={"payment_id": f"{payment.payment_id}_{suffix}", "order_id": order.order_id, "charge_id": f"{payment.charge_id}_{suffix}"})
+    dispute = dispute.model_copy(
+        update={
+            "dispute_id": f"{dispute.dispute_id}_{suffix}",
+            "charge_id": payment.charge_id,
+            "order_id": order.order_id,
+        }
+    )
+
+    linked_records = []
+    record_id_map = {
+        RecordType.ORDER: order.order_id,
+        RecordType.CUSTOMER: customer.customer_id,
+        RecordType.SHIPPING: shipping.shipment_id,
+        RecordType.PAYMENT: payment.payment_id,
+        RecordType.DISPUTE: dispute.dispute_id,
+    }
+    for record in case.linked_records:
+        linked_records.append(record.model_copy(update={"record_id": record_id_map.get(record.record_type, record.record_id)}))
+
+    renamed_case = case.model_copy(
+        update={
+            "customer_id": customer.customer_id,
+            "linked_records": linked_records,
+        }
+    )
+
+    renamed_records = RecordStore(
+        orders={order.order_id: order},
+        customers={customer.customer_id: customer},
+        disputes={dispute.dispute_id: dispute},
+        policies=records.policies,
+        message_templates=records.message_templates,
+        shipping={shipping.shipment_id: shipping},
+        payments={payment.payment_id: payment},
+    )
+    return renamed_case, renamed_records
 
 
 def _refund_case(rng: random.Random, task_id: TaskId, current_time: int) -> tuple[CaseState, RecordStore]:
@@ -426,6 +481,9 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
             refund_case.priority = int(Priority.CRITICAL if idx == 0 else Priority.HIGH)
             refund_case.sla_deadline = current_time + (25 if idx == 0 else 45)
             refund_case.visible_summary = f"Refund exception {idx + 1}"
+            if idx == 0:
+                refund_case.hidden.qa_sample_on_close = True
+                refund_case.hidden.qa_sample_delay_minutes = 8
             if idx == 1:
                 refund_case.amount = 45.0
                 refund_case.visible_summary = "Low-dollar inquiry with weak recovery economics"
@@ -475,7 +533,44 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
         state.records = combined
         state.cases = {case.case_id: case for case in triage_cases}
         state.queue_order = [case.case_id for case in triage_cases]
-        state.metadata["max_steps"] = 55
+        state.metadata["max_steps"] = 70
+        state.metadata["staffing_status"] = "normal"
+
+        arrival_case, arrival_records = _refund_case(rng, task_id, current_time + 8)
+        arrival_case, arrival_records = _rename_refund_bundle(arrival_case, arrival_records, "wave1")
+        arrival_case = arrival_case.model_copy(
+            update={
+                "case_id": "case_refund_wave_1",
+                "priority": int(Priority.HIGH),
+                "sla_deadline": current_time + 42,
+                "visible_summary": "New refund exception arrived during peak queue load",
+                "active_queue": "refund_ops",
+            }
+        )
+        state.scheduled_events.append(
+            ArrivalWaveEvent(
+                at_time=current_time + 8,
+                wave_id="midshift_refund_spike",
+                incoming_cases=[arrival_case],
+                record_bundle=ArrivalWaveRecordBundle(
+                    orders=arrival_records.orders,
+                    customers=arrival_records.customers,
+                    disputes=arrival_records.disputes,
+                    policies=arrival_records.policies,
+                    message_templates=arrival_records.message_templates,
+                    shipping=arrival_records.shipping,
+                    payments=arrival_records.payments,
+                ),
+            )
+        )
+        state.scheduled_events.append(
+            StaffingDropEvent(
+                at_time=current_time + 18,
+                capacity_delta=1,
+                affected_owners=["analyst_2"],
+            )
+        )
+        state.scheduled_events.sort(key=lambda event: event.at_time)
 
     state.current_time = current_time
     return state

@@ -6,6 +6,7 @@ from opsarena.domain.events import (
     ChargebackEvent,
     FollowUpDueEvent,
     InfoResponseEvent,
+    QASampleSelectedEvent,
     ReworkDueEvent,
     ReopenEvent,
     SecondaryApprovalDecisionEvent,
@@ -76,7 +77,7 @@ def handle_search_cases(state: WorldState, action: SearchCasesAction) -> tuple[T
 def handle_open_case(state: WorldState, action: OpenCaseAction):
     case = require_case(state, action.case_id)
     state.current_case_id = case.case_id
-    case.status = "in_progress" if case.status in {"open", "reopened", "rework"} else case.status
+    case.status = "in_progress" if case.status in {"open", "reopened", "rework", "assigned", "routed"} else case.status
     return TransitionResult(True, f"Opened {case.case_id}"), case
 
 
@@ -501,6 +502,14 @@ def handle_close_case(state: WorldState, action: CloseCaseAction):
     state.queue_order = [cid for cid in state.queue_order if state.cases[cid].status != "closed"] + [
         cid for cid in state.queue_order if state.cases[cid].status == "closed"
     ]
+    if case.hidden.qa_sample_on_close and case.qa_status == QAStatus.NOT_REQUESTED:
+        schedule_event(
+            state,
+            QASampleSelectedEvent(
+                at_time=state.current_time + (case.hidden.qa_sample_delay_minutes or 10),
+                case_id=case.case_id,
+            ),
+        )
     if case.requires_customer_notification and not case.customer_notified:
         schedule_event(state, ReopenEvent(at_time=state.current_time + 15, case_id=case.case_id))
     return TransitionResult(True, f"Closed {case.case_id}"), case

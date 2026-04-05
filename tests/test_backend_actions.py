@@ -7,6 +7,7 @@ from opsarena.models import (
     ApproveQAAction,
     ApproveAction,
     ClaimCaseAction,
+    CloseCaseAction,
     BulkAssignAction,
     BulkRouteAction,
     ExecuteRefundAction,
@@ -18,6 +19,7 @@ from opsarena.models import (
     RecordThreeWayMatchAction,
     ReleasePaymentHoldAction,
     RequestCreditMemoAction,
+    QueryPolicyAction,
     ReturnToQueueAction,
     ResumeSLAAction,
     ReviewKYCAction,
@@ -25,6 +27,7 @@ from opsarena.models import (
     ScheduleFollowUpAction,
     SendToQAAction,
     SendForSecondaryApprovalAction,
+    SendMessageAction,
     SubmitDisputeEvidenceAction,
     TriggerReverificationAction,
 )
@@ -301,3 +304,52 @@ def test_supervisor_bulk_assign_route_and_rebalance_update_queue_state():
     assert bulk_routed.error is None
     assert env._state.cases["case_refund_2"].active_queue == "manager_review"
     assert env._state.cases["case_invoice_1"].route_history[-1].queue == "manager_review"
+
+
+def test_arrival_wave_and_staffing_drop_change_queue_capacity_and_backlog():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(
+        RebalanceQueueAction(
+            assignee_pool=["analyst_1", "analyst_2"],
+            max_cases=3,
+            rebalance_strategy="sla_priority",
+        )
+    )
+    assigned_to_analyst_2 = [
+        case.case_id for case in env._state.cases.values() if case.current_owner == "analyst_2"
+    ]
+    assert assigned_to_analyst_2
+
+    arrival_due = min(event.at_time for event in env._state.scheduled_events if event.event_type == "arrival_wave")
+    env.step(AdvanceClockAction(minutes=arrival_due - env._state.current_time))
+    assert "case_refund_wave_1" in env._state.cases
+    assert env._state.queue_state().exception_queue_size == 6
+
+    staffing_due = min(event.at_time for event in env._state.scheduled_events if event.event_type == "staffing_drop")
+    env.step(AdvanceClockAction(minutes=staffing_due - env._state.current_time))
+    assert env._state.metadata["agent_capacity"] == 1
+    for case_id in assigned_to_analyst_2:
+        assert env._state.cases[case_id].current_owner == "queue"
+        assert "staffing_drop" in env._state.cases[case_id].visible_flags
+
+
+def test_qa_sample_selected_reopens_closed_case_for_review():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(OpenCaseAction(case_id="case_refund_1"))
+    env.step(QueryPolicyAction(policy_id="refund_policy"))
+    env.step(ApproveAction(case_id="case_refund_1"))
+    env.step(
+        SendMessageAction(
+            case_id="case_refund_1",
+            template_id="refund_approved",
+            slots={"amount": "350.00", "order_id": "ord_1001"},
+        )
+    )
+    env.step(CloseCaseAction(case_id="case_refund_1", resolution_code="done"))
+
+    qa_due = min(event.at_time for event in env._state.scheduled_events if event.event_type == "qa_sample_selected")
+    env.step(AdvanceClockAction(minutes=qa_due - env._state.current_time))
+    assert env._state.cases["case_refund_1"].qa_status.value == "pending"
+    assert env._state.cases["case_refund_1"].status == "pending_qa"
