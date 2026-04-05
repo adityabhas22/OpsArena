@@ -118,7 +118,7 @@ class RefundExceptionToolEnv:
             return 0.0
         return float(self._env._state.metadata.get("legacy_objective_score", 0.0))
 
-    def reset(self) -> str:
+    def reset(self, **_: Any) -> str:
         """Reset the refund episode and return the initial text observation.
 
         Returns:
