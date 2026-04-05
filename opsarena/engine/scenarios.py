@@ -635,15 +635,18 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
             error_type=invoice_error_type,
             sla_tightness=invoice_sla,
         )
+        kyc_doc_validity = _choose_factor(template, rng, "doc_validity", "valid")
+        kyc_sanctions_path = _choose_factor(template, rng, "sanctions_path", "false_positive")
+        kyc_owner_review = _choose_factor(template, rng, "owner_review_path", "clean")
         kyc_case, kyc_records = _kyc_case(
             current_time,
             task_id,
-            doc_valid=True,
+            doc_valid=kyc_doc_validity != "invalid",
             latency_minutes=_latency_minutes(response_latency, fast=15, standard=35, slow=45, silent=90),
-            sanctions_path="false_positive",
-            edd_required=True,
-            beneficial_owner_issue=True,
-            ofac_report_required=False,
+            sanctions_path=kyc_sanctions_path,
+            edd_required=kyc_sanctions_path != "clear",
+            beneficial_owner_issue=kyc_owner_review == "correction_required",
+            ofac_report_required=kyc_sanctions_path == "confirmed_match",
             sla_tightness=invoice_sla,
         )
         state.records = RecordStore(
