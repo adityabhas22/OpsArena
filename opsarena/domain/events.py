@@ -80,6 +80,42 @@ class QASampleSelectedEvent(BaseScheduledEvent):
     case_id: str
 
 
+class InquiryEscalatesToChargebackEvent(BaseScheduledEvent):
+    event_type: Literal["inquiry_escalates_to_chargeback"] = "inquiry_escalates_to_chargeback"
+    case_id: str
+
+
+class PrearbitrationReceivedEvent(BaseScheduledEvent):
+    event_type: Literal["prearbitration_received"] = "prearbitration_received"
+    case_id: str
+
+
+class ReserveReleaseDueEvent(BaseScheduledEvent):
+    event_type: Literal["reserve_release_due"] = "reserve_release_due"
+    case_id: str
+
+
+class MonitoringThresholdBreachedEvent(BaseScheduledEvent):
+    event_type: Literal["monitoring_threshold_breached"] = "monitoring_threshold_breached"
+    case_id: str
+
+
+class SanctionsFalsePositiveClearedEvent(BaseScheduledEvent):
+    event_type: Literal["sanctions_false_positive_cleared"] = "sanctions_false_positive_cleared"
+    case_id: str
+
+
+class EDDResponseDueEvent(BaseScheduledEvent):
+    event_type: Literal["edd_response_due"] = "edd_response_due"
+    case_id: str
+    due_at: int
+
+
+class ReportDeadlineMissedEvent(BaseScheduledEvent):
+    event_type: Literal["report_deadline_missed"] = "report_deadline_missed"
+    case_id: str
+
+
 class ArrivalWaveRecordBundle(BaseModel):
     orders: dict[str, OrderRecord] = Field(default_factory=dict)
     customers: dict[str, CustomerRecord] = Field(default_factory=dict)
@@ -102,6 +138,31 @@ class ArrivalWaveEvent(BaseScheduledEvent):
     record_bundle: ArrivalWaveRecordBundle = Field(default_factory=ArrivalWaveRecordBundle)
 
 
+class VendorRevisedInvoiceEvent(BaseScheduledEvent):
+    event_type: Literal["vendor_revised_invoice"] = "vendor_revised_invoice"
+    revised_amount: int = 0
+
+
+class POChangeApprovedEvent(BaseScheduledEvent):
+    event_type: Literal["po_change_approved"] = "po_change_approved"
+    approved: bool = True
+
+
+class StopPaymentConfirmedEvent(BaseScheduledEvent):
+    event_type: Literal["stop_payment_confirmed"] = "stop_payment_confirmed"
+    success: bool = True
+
+
+class VendorRefundReceivedEvent(BaseScheduledEvent):
+    event_type: Literal["vendor_refund_received"] = "vendor_refund_received"
+    refund_amount: int = 0
+
+
+class PaymentBatchExecutedEvent(BaseScheduledEvent):
+    event_type: Literal["payment_batch_executed"] = "payment_batch_executed"
+    batch_id: str = ""
+
+
 class StaffingDropEvent(BaseScheduledEvent):
     event_type: Literal["staffing_drop"] = "staffing_drop"
     capacity_delta: int = 1
@@ -119,7 +180,19 @@ ScheduledEvent = Annotated[
     | FollowUpDueEvent
     | ReworkDueEvent
     | QASampleSelectedEvent
+    | InquiryEscalatesToChargebackEvent
+    | PrearbitrationReceivedEvent
+    | ReserveReleaseDueEvent
+    | MonitoringThresholdBreachedEvent
+    | SanctionsFalsePositiveClearedEvent
+    | EDDResponseDueEvent
+    | ReportDeadlineMissedEvent
     | ArrivalWaveEvent
-    | StaffingDropEvent,
+    | StaffingDropEvent
+    | VendorRevisedInvoiceEvent
+    | POChangeApprovedEvent
+    | StopPaymentConfirmedEvent
+    | VendorRefundReceivedEvent
+    | PaymentBatchExecutedEvent,
     Field(discriminator="event_type"),
 ]

@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 
 from opsarena.documents import (
+    BeneficialOwner,
     CustomerRecord,
     DisputeRecord,
     DisputeEvidence,
@@ -24,7 +25,14 @@ from opsarena.documents import (
     ShippingRecord,
 )
 from opsarena.domain.core import LinkedRecord
-from opsarena.domain.events import ArrivalWaveEvent, ArrivalWaveRecordBundle, StaffingDropEvent
+from opsarena.domain.events import (
+    ArrivalWaveEvent,
+    ArrivalWaveRecordBundle,
+    InquiryEscalatesToChargebackEvent,
+    MonitoringThresholdBreachedEvent,
+    SLABreachEvent,
+    StaffingDropEvent,
+)
 from opsarena.domain.hidden import CaseHiddenState
 from opsarena.domain.workflows.invoice import (
     ApprovalDecision,
@@ -32,9 +40,23 @@ from opsarena.domain.workflows.invoice import (
     CreditMemoStatus,
     DuplicateStatus,
     InvoiceWorkflowState,
+    PaymentBatchStatus,
 )
-from opsarena.domain.workflows.kyc import KYCStage, KYCWorkflowState
-from opsarena.domain.workflows.refund import DisputeResolution, DisputeStage, RefundWorkflowState
+from opsarena.domain.workflows.kyc import (
+    BeneficialOwnerStatus,
+    EDDStatus,
+    KYCStage,
+    KYCWorkflowState,
+    OFACReportStatus,
+    SanctionsStatus,
+)
+from opsarena.domain.workflows.refund import (
+    DisputeResolution,
+    DisputeStage,
+    MonitoringProgramStatus,
+    PreDisputeType,
+    RefundWorkflowState,
+)
 from opsarena.engine.policies import load_policy
 from opsarena.engine.state import CaseState, RecordStore, WorldState
 from opsarena.enums import CaseType, MatchStatus, Priority, RecordType, TargetQueue, TaskId
@@ -254,19 +276,30 @@ def _refund_case(rng: random.Random, task_id: TaskId, current_time: int) -> tupl
         active_queue="refund_ops",
         hidden=CaseHiddenState(
             hidden_follow_up_latency_minutes=20,
+            true_dispute_should_accept=fraud_risk > 0.7,
             true_fraud_risk=fraud_risk,
             true_downstream_loss=125.0 if fraud_risk > 0.7 else 0.0,
         ),
         workflow=RefundWorkflowState(
             sla_total=60,
             refund_threshold=500.0,
+            pre_dispute_type=PreDisputeType.NONE,
             dispute_workflow_status=dispute.status,
             dispute_stage=DisputeStage.CHARGEBACK_OPEN,
             dispute_resolution=DisputeResolution.PENDING,
             dispute_fee=15.0,
-            dispute_should_accept=fraud_risk > 0.7,
+            chargeback_received_at=current_time - 5,
+            representment_due_at=current_time + 18,
+            chargeback_amount=350.0,
+            merchant_dispute_ratio_30d=0.004 if fraud_risk <= 0.7 else 0.009,
+            merchant_fraud_ratio_30d=0.002 if fraud_risk <= 0.7 else 0.006,
+            merchant_negative_balance=fraud_risk > 0.7,
+            merchant_age_days=45 if fraud_risk > 0.7 else 365,
+            merchant_volume_change_7d=-0.35 if fraud_risk > 0.7 else -0.05,
+            avg_fulfillment_days=5 if fraud_risk > 0.7 else 2,
         ),
     )
+    case.workflow.recompute_risk_state()
     return case, records
 
 
@@ -365,7 +398,18 @@ def _invoice_case(current_time: int, task_id: TaskId, duplicate: bool, latency_m
     return case, records
 
 
-def _kyc_case(current_time: int, task_id: TaskId, doc_valid: bool, latency_minutes: int) -> tuple[CaseState, RecordStore]:
+def _kyc_case(
+    current_time: int,
+    task_id: TaskId,
+    doc_valid: bool,
+    latency_minutes: int,
+    *,
+    sanctions_false_positive: bool = False,
+    sanctions_match: bool = False,
+    edd_required: bool = False,
+    beneficial_owner_issue: bool = False,
+    ofac_report_required: bool = False,
+) -> tuple[CaseState, RecordStore]:
     records = RecordStore()
     records.policies["kyc_policy"] = load_policy("kyc_policy")
     customer = CustomerRecord(
@@ -385,6 +429,25 @@ def _kyc_case(current_time: int, task_id: TaskId, doc_valid: bool, latency_minut
         requirements_currently_due=["individual.verification.document"],
         requirements_past_due=[],
         error_code=None if doc_valid else "document_expired",
+        legal_business_name="Patel Outdoor Supply LLC",
+        incorporation_country="US",
+        business_type="marketplace_seller",
+        beneficial_owners=[
+            BeneficialOwner(
+                owner_id="bo_1",
+                full_name="Avery Patel",
+                ownership_percent=72.0,
+                title="Founder",
+                address="17 Market Street, Austin, TX",
+            ),
+            BeneficialOwner(
+                owner_id="bo_2",
+                full_name="Jordan Patel",
+                ownership_percent=28.0,
+                title="Operations Lead",
+                address="" if beneficial_owner_issue else "90 River Road, Austin, TX",
+            ),
+        ],
     )
     records.customers[customer.customer_id] = customer
     records.kyc_verifications[verification.session_id] = verification
@@ -396,14 +459,14 @@ def _kyc_case(current_time: int, task_id: TaskId, doc_valid: bool, latency_minut
         sla_deadline=current_time + 120,
         created_at=current_time,
         amount=2400.0,
-        visible_summary="Merchant payout blocked until ID verification is complete.",
+        visible_summary="Merchant payout blocked pending KYC and compliance review.",
         visible_flags=["payout_hold"],
         linked_records=[
             LinkedRecord(record_type=RecordType.CUSTOMER, record_id=customer.customer_id, title="Merchant profile"),
             LinkedRecord(record_type=RecordType.KYC_DOCUMENT, record_id=verification.session_id, title="KYC verification"),
         ],
-        required_check_names=["review_kyc_profile", "review_policy", "review_document"],
-        checks_required=3,
+        required_check_names=["review_kyc_profile", "review_policy", "review_document", "review_sanctions", "review_beneficial_owner"],
+        checks_required=5,
         evidence_types_available=["kyc_documents", "identity_verification", "compliance_policy", "customer_profile"],
         evidence_items_available=4,
         notifications_required=1,
@@ -414,9 +477,15 @@ def _kyc_case(current_time: int, task_id: TaskId, doc_valid: bool, latency_minut
         active_queue="kyc_review",
         hidden=CaseHiddenState(
             hidden_required_documents=["individual.verification.document"],
+            hidden_correction_fields=["owners.1.address"] if beneficial_owner_issue else [],
             hidden_response_latency_minutes=latency_minutes,
             hidden_follow_up_latency_minutes=40,
             true_doc_valid=doc_valid,
+            true_sanctions_match=sanctions_match,
+            true_sanctions_false_positive=sanctions_false_positive,
+            true_edd_required=edd_required,
+            true_beneficial_owner_issue=beneficial_owner_issue,
+            true_ofac_report_required=ofac_report_required,
         ),
         workflow=KYCWorkflowState(
             sla_total=120,
@@ -424,6 +493,11 @@ def _kyc_case(current_time: int, task_id: TaskId, doc_valid: bool, latency_minut
             requirements_due=verification.requirements_currently_due.copy(),
             payout_hold=True,
             kyc_stage=KYCStage.CURRENT_DUE,
+            sanctions_status=SanctionsStatus.NOT_STARTED,
+            edd_status=EDDStatus.NOT_STARTED if edd_required or beneficial_owner_issue else EDDStatus.NOT_REQUIRED,
+            beneficial_owner_status=BeneficialOwnerStatus.NOT_STARTED,
+            ofac_report_status=OFACReportStatus.NOT_REQUIRED,
+            screening_match_confidence=0.82 if sanctions_false_positive else (0.99 if sanctions_match else 0.08),
         ),
     )
     return case, records
@@ -446,7 +520,15 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
         invoice_case, invoice_records = _invoice_case(
             current_time, task_id, duplicate=bool(rng.randint(0, 1)), latency_minutes=30
         )
-        kyc_case, kyc_records = _kyc_case(current_time, task_id, doc_valid=bool(rng.randint(0, 1)), latency_minutes=45)
+        kyc_case, kyc_records = _kyc_case(
+            current_time,
+            task_id,
+            doc_valid=True,
+            latency_minutes=45,
+            sanctions_false_positive=True,
+            edd_required=True,
+            beneficial_owner_issue=True,
+        )
         state.records = RecordStore(
             customers={**invoice_records.customers, **kyc_records.customers},
             invoices=invoice_records.invoices,
@@ -484,12 +566,26 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
             if idx == 0:
                 refund_case.hidden.qa_sample_on_close = True
                 refund_case.hidden.qa_sample_delay_minutes = 8
+                refund_case.workflow.merchant_dispute_ratio_30d = 0.012
+                refund_case.workflow.merchant_fraud_ratio_30d = 0.004
+                refund_case.workflow.merchant_negative_balance = True
+                refund_case.workflow.avg_fulfillment_days = 8
+                refund_case.workflow.recompute_risk_state()
             if idx == 1:
                 refund_case.amount = 45.0
                 refund_case.visible_summary = "Low-dollar inquiry with weak recovery economics"
+                refund_case.workflow.pre_dispute_type = PreDisputeType.INQUIRY
+                refund_case.workflow.pre_dispute_due_at = current_time + 12
                 refund_case.workflow.dispute_stage = DisputeStage.INQUIRY
-                refund_case.workflow.dispute_should_accept = True
+                refund_case.hidden.true_dispute_should_accept = True
                 refund_case.workflow.dispute_fee = 15.0
+                refund_case.workflow.chargeback_received_at = None
+                refund_case.workflow.representment_due_at = None
+                refund_case.workflow.chargeback_amount = refund_case.amount
+                refund_case.workflow.merchant_dispute_ratio_30d = 0.008
+                refund_case.workflow.merchant_fraud_ratio_30d = 0.002
+                refund_case.workflow.avg_fulfillment_days = 6
+                refund_case.workflow.recompute_risk_state()
             triage_cases.append(refund_case)
             combined.customers.update(records.customers)
             combined.orders.update(records.orders)
@@ -513,6 +609,14 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
                 invoice_case.visible_summary = "Invoice variance likely needs credit memo and secondary approval"
                 invoice_case.workflow.match_status = MatchStatus.VARIANCE
                 invoice_case.workflow.variance_amount = 24.5
+                invoice_case.hidden.true_variance_within_tolerance = False  # 24.5/124.5 = 19.7%, above 3% tolerance
+                invoice_case.workflow.payment_batch_status = PaymentBatchStatus.SCHEDULED
+                invoice_case.workflow.payment_batch_id = "batch_001"
+                invoice_case.workflow.stop_payment_window_until = current_time + 50
+                invoice_case.hidden.true_vendor_will_respond = True
+                invoice_case.hidden.true_vendor_response_minutes = 20
+                invoice_case.hidden.true_po_change_approved = True
+                invoice_case.hidden.true_recoverable_amount = 24.5
             else:
                 invoice_case.qa_required = True
                 invoice_case.visible_flags = list(dict.fromkeys(invoice_case.visible_flags + ["qa_required"]))
@@ -520,10 +624,19 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
             combined.invoices.update(records.invoices)
             combined.purchase_orders.update(records.purchase_orders)
             combined.policies.update(records.policies)
-        kyc_case, records = _kyc_case(current_time, task_id, doc_valid=True, latency_minutes=25)
+        kyc_case, records = _kyc_case(
+            current_time,
+            task_id,
+            doc_valid=True,
+            latency_minutes=25,
+            sanctions_match=True,
+            edd_required=True,
+            ofac_report_required=True,
+        )
         kyc_case.case_id = "case_kyc_triage"
         kyc_case.priority = int(Priority.CRITICAL)
         kyc_case.sla_deadline = current_time + 30
+        kyc_case.visible_summary = "Merchant flagged for sanctions review with payout controls required."
         triage_cases.append(kyc_case)
         combined.customers.update(records.customers)
         combined.kyc_verifications.update(records.kyc_verifications)
@@ -535,7 +648,21 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
         state.queue_order = [case.case_id for case in triage_cases]
         state.metadata["max_steps"] = 70
         state.metadata["staffing_status"] = "normal"
-
+        schedule_refund_2 = next(case for case in triage_cases if case.case_id == "case_refund_2")
+        schedule_event_time = schedule_refund_2.workflow.pre_dispute_due_at
+        if schedule_event_time is not None:
+            state.scheduled_events.append(
+                InquiryEscalatesToChargebackEvent(
+                    at_time=schedule_event_time,
+                    case_id=schedule_refund_2.case_id,
+                )
+            )
+        state.scheduled_events.append(
+            MonitoringThresholdBreachedEvent(
+                at_time=current_time + 16,
+                case_id="case_refund_1",
+            )
+        )
         arrival_case, arrival_records = _refund_case(rng, task_id, current_time + 8)
         arrival_case, arrival_records = _rename_refund_bundle(arrival_case, arrival_records, "wave1")
         arrival_case = arrival_case.model_copy(
@@ -573,4 +700,17 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
         state.scheduled_events.sort(key=lambda event: event.at_time)
 
     state.current_time = current_time
+
+    # Schedule SLA breach events for all cases so agents get visible warnings
+    for case in state.cases.values():
+        if not any(e.event_type == "sla_breach" and e.case_id == case.case_id for e in state.scheduled_events):
+            state.scheduled_events.append(
+                SLABreachEvent(
+                    event_id=f"evt-sla-{case.case_id}",
+                    at_time=case.sla_deadline,
+                    case_id=case.case_id,
+                )
+            )
+    state.scheduled_events.sort(key=lambda event: event.at_time)
+
     return state

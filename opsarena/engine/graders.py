@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from math import comb
 
-from opsarena.domain.workflows.invoice import CreditMemoStatus, InvoiceWorkflowState
-from opsarena.domain.workflows.kyc import KYCWorkflowState
-from opsarena.domain.workflows.refund import DisputeResolution, RefundWorkflowState
+from opsarena.domain.workflows.invoice import CreditMemoStatus, InvoiceWorkflowState, PaymentBatchStatus
+from opsarena.domain.workflows.kyc import KYCWorkflowState, OFACReportStatus, SanctionsStatus
+from opsarena.domain.workflows.refund import DisputeResolution, DisputeStage, RefundWorkflowState
 from opsarena.engine.state import WorldState
 from opsarena.enums import CaseType, Resolution, TaskId
 
@@ -21,8 +21,13 @@ def _case_outcome_score(case) -> float:
     if case.case_type == CaseType.REFUND:
         workflow = case.workflow
         assert isinstance(workflow, RefundWorkflowState)
+        if workflow.pre_dispute_type.value != "none" or workflow.dispute_stage != DisputeStage.CHARGEBACK_OPEN:
+            if case.hidden.true_dispute_should_accept:
+                return 1.0 if case.resolution == Resolution.APPROVED and case.status == "closed" else 0.0
+            if workflow.dispute_resolution == DisputeResolution.WON or case.resolution == Resolution.REJECTED:
+                return 1.0 if case.status == "closed" else 0.5
         if workflow.dispute_resolution == DisputeResolution.ACCEPTED:
-            return 1.0 if workflow.dispute_should_accept and case.status == "closed" else 0.25
+            return 1.0 if case.hidden.true_dispute_should_accept and case.status == "closed" else 0.25
         expected = Resolution.REJECTED if case.hidden.true_fraud_risk > 0.7 else Resolution.APPROVED
     elif case.case_type == CaseType.INVOICE:
         workflow = case.workflow
@@ -33,7 +38,9 @@ def _case_outcome_score(case) -> float:
     else:
         workflow = case.workflow
         assert isinstance(workflow, KYCWorkflowState)
-        if not case.hidden.true_doc_valid:
+        if case.hidden.true_sanctions_match:
+            expected = Resolution.REJECTED
+        elif not case.hidden.true_doc_valid:
             expected = Resolution.REJECTED
         elif not workflow.kyc_complete:
             expected = Resolution.DEFERRED
@@ -61,6 +68,11 @@ def grade_trajectory(state: WorldState) -> float:
         "follow_up_discipline": 1.0,
         "qa_before_close": 1.0,
         "qa_rework_discipline": 1.0,
+        "refund_risk_controls": 1.0,
+        "sanctions_before_approve": 1.0,
+        "ofac_report_before_close": 1.0,
+        "freeze_on_confirmed_match": 1.0,
+        "stop_payment_discipline": 1.0,
     }
     for case in state.cases.values():
         events = [entry.action_type for entry in audit if entry.case_id == case.case_id]
@@ -72,7 +84,8 @@ def grade_trajectory(state: WorldState) -> float:
             checks["notify_before_close"] = 0.0
         if any(evt in {"approve", "reject", "escalate", "close_case"} for evt in events) and "open_case" not in events:
             checks["open_before_action"] = 0.0
-        if case.requested_info_fields and len(case.requested_info_fields) > 2:
+        info_requests = [f for f in case.requested_info_fields if not f.startswith("owners.")]
+        if info_requests and len(info_requests) > 2:
             checks["request_info_limit"] = 0.0
         if (
             isinstance(case.workflow, InvoiceWorkflowState)
@@ -87,6 +100,40 @@ def grade_trajectory(state: WorldState) -> float:
             checks["qa_before_close"] = 0.0
         if case.qa_rework_overdue or state.metrics.qa_rework_overdue > 0:
             checks["qa_rework_discipline"] = 0.0
+        if (
+            isinstance(case.workflow, RefundWorkflowState)
+            and case.workflow.monitoring_program_status.value == "breached"
+            and case.status == "closed"
+            and not any(evt in {"freeze_payouts", "set_reserve_percent", "set_payout_delay_days"} for evt in events)
+        ):
+            checks["refund_risk_controls"] = 0.0
+        if (
+            isinstance(case.workflow, KYCWorkflowState)
+            and case.resolution == Resolution.APPROVED
+            and case.workflow.sanctions_status != SanctionsStatus.CLEAR
+        ):
+            checks["sanctions_before_approve"] = 0.0
+        if (
+            isinstance(case.workflow, KYCWorkflowState)
+            and case.hidden.true_ofac_report_required
+            and case.resolution == Resolution.REJECTED
+            and "file_ofac_report" not in events
+        ):
+            checks["ofac_report_before_close"] = 0.0
+        if (
+            isinstance(case.workflow, KYCWorkflowState)
+            and case.hidden.true_sanctions_match
+            and case.resolution == Resolution.REJECTED
+            and "freeze_payments" not in events
+        ):
+            checks["freeze_on_confirmed_match"] = 0.0
+        if (
+            isinstance(case.workflow, InvoiceWorkflowState)
+            and case.workflow.payment_batch_status == PaymentBatchStatus.COMPLETED
+            and case.hidden.true_is_duplicate
+            and not any(evt in {"stop_payment", "remove_from_payment_batch"} for evt in events)
+        ):
+            checks["stop_payment_discipline"] = 0.0
     return sum(checks.values()) / len(checks)
 
 

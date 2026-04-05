@@ -49,6 +49,9 @@ class EpisodeMetrics(BaseModel):
     qa_reviews_passed: int = 0
     qa_reviews_failed: int = 0
     qa_rework_overdue: int = 0
+    payment_freezes: int = 0
+    ofac_reports_filed: int = 0
+    report_deadlines_missed: int = 0
 
 
 class RecordStore(BaseModel):

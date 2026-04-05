@@ -6,21 +6,47 @@ from opsarena.domain.events import (
     ArrivalWaveEvent,
     ChargebackEvent,
     DisputeOutcomeEvent,
+    EDDResponseDueEvent,
     FollowUpDueEvent,
     InfoResponseEvent,
+    InquiryEscalatesToChargebackEvent,
+    MonitoringThresholdBreachedEvent,
+    POChangeApprovedEvent,
+    PaymentBatchExecutedEvent,
+    PrearbitrationReceivedEvent,
     QASampleSelectedEvent,
+    ReportDeadlineMissedEvent,
+    ReserveReleaseDueEvent,
     ReworkDueEvent,
     ReopenEvent,
+    SanctionsFalsePositiveClearedEvent,
     SLABreachEvent,
     ScheduledEvent,
     StaffingDropEvent,
+    StopPaymentConfirmedEvent,
     SecondaryApprovalDecisionEvent,
     VendorCreditMemoReceivedEvent,
+    VendorRefundReceivedEvent,
+    VendorRevisedInvoiceEvent,
 )
-from opsarena.domain.workflows.invoice import ApprovalStatus, CreditMemoStatus, DuplicateStatus
-from opsarena.domain.workflows.kyc import KYCStage
-from opsarena.domain.workflows.refund import DisputeResolution, DisputeStage
-from opsarena.engine.handlers.common import require_invoice_workflow, require_kyc_workflow, require_refund_workflow
+from opsarena.domain.workflows.invoice import (
+    ApprovalStatus,
+    CreditMemoStatus,
+    DuplicateStatus,
+    POChangeStatus,
+    PaymentBatchStatus,
+    RecoveryStatus,
+    VendorResponseStatus,
+)
+from opsarena.domain.workflows.kyc import BeneficialOwnerStatus, EDDStatus, KYCStage, OFACReportStatus, SanctionsStatus
+from opsarena.domain.workflows.refund import DisputeResolution, DisputeStage, MonitoringProgramStatus
+from opsarena.engine.handlers.common import (
+    require_invoice_workflow,
+    require_kyc_workflow,
+    require_refund_workflow,
+    sync_kyc_flags,
+    sync_refund_risk_flags,
+)
 from opsarena.engine.state import AuditEntry, WorldState
 from opsarena.enums import CaseType, RecordType, Resolution
 
@@ -57,20 +83,36 @@ def process_due_events(state: WorldState) -> list[str]:
             if field_name == "individual.verification.document":
                 assert event.record_id is not None
                 verification = state.records.kyc_verifications[event.record_id]
-                verification.status = "verified"
+                verification.status = "pending_review"
                 verification.requirements_currently_due = []
+                verification.error_code = None if case.hidden.true_doc_valid else verification.error_code
                 workflow = require_kyc_workflow(case)
-                workflow.kyc_complete = True
+                workflow.kyc_complete = False
                 workflow.verification_status = verification.status
                 workflow.requirements_due = []
                 workflow.kyc_stage = KYCStage.PENDING_REVIEW
+                sync_kyc_flags(case)
+            elif case.case_type == CaseType.KYC:
+                workflow = require_kyc_workflow(case)
+                verification = state.records.kyc_verifications[next(
+                    record.record_id for record in case.linked_records if record.record_type == RecordType.KYC_DOCUMENT
+                )]
+                workflow.correction_fields = [field for field in workflow.correction_fields if field != field_name]
+                verification.correction_requests = [field for field in verification.correction_requests if field != field_name]
+                if not workflow.correction_fields:
+                    workflow.beneficial_owner_status = BeneficialOwnerStatus.PENDING_REVIEW
+                    workflow.edd_status = EDDStatus.IN_PROGRESS
+                sync_kyc_flags(case)
             messages.append(f"{field_name} received for {case.case_id}")
         elif isinstance(event, ChargebackEvent):
             assert case is not None
             case.status = "reopened"
             state.metrics.chargebacks += 1
             state.metrics.reopens += 1
-            require_refund_workflow(case).dispute_stage = DisputeStage.CHARGEBACK_OPEN
+            workflow = require_refund_workflow(case)
+            workflow.dispute_stage = DisputeStage.CHARGEBACK_OPEN
+            workflow.chargeback_received_at = state.current_time
+            workflow.representment_due_at = state.current_time + 18
             messages.append(f"Chargeback triggered on {case.case_id}")
         elif isinstance(event, DisputeOutcomeEvent):
             assert case is not None
@@ -83,20 +125,54 @@ def process_due_events(state: WorldState) -> list[str]:
                 if case.resolution == Resolution.PENDING:
                     case.resolution = Resolution.APPROVED
                     case.status = "resolved"
+                workflow.merchant_dispute_ratio_30d = max(0.0, round(workflow.merchant_dispute_ratio_30d - 0.0005, 4))
+                sync_refund_risk_flags(case)
                 messages.append(f"Dispute won for {case.case_id}")
-            elif outcome == "pre_arbitration":
-                case.status = "reopened"
-                workflow.dispute_stage = DisputeStage.PRE_ARBITRATION
-                workflow.dispute_workflow_status = "pre_arbitration"
-                state.metrics.reopens += 1
-                messages.append(f"Pre-arbitration received for {case.case_id}")
             else:
                 case.status = "reopened"
                 workflow.dispute_stage = DisputeStage.LOST
                 workflow.dispute_resolution = DisputeResolution.LOST
+                workflow.merchant_dispute_ratio_30d = round(workflow.merchant_dispute_ratio_30d + 0.003, 4)
+                if case.hidden.true_fraud_risk > 0.7:
+                    workflow.merchant_fraud_ratio_30d = round(workflow.merchant_fraud_ratio_30d + 0.002, 4)
+                sync_refund_risk_flags(case)
+                if (
+                    workflow.monitoring_program_status == MonitoringProgramStatus.BREACHED
+                    and not any(
+                        pending.event_type == "monitoring_threshold_breached" and pending.case_id == case.case_id
+                        for pending in state.scheduled_events
+                    )
+                ):
+                    schedule_event(
+                        state,
+                        MonitoringThresholdBreachedEvent(at_time=state.current_time + 5, case_id=case.case_id),
+                    )
                 state.metrics.chargebacks += 1
                 state.metrics.reopens += 1
                 messages.append(f"Dispute lost for {case.case_id}")
+        elif isinstance(event, InquiryEscalatesToChargebackEvent):
+            assert case is not None
+            workflow = require_refund_workflow(case)
+            if workflow.dispute_stage == DisputeStage.INQUIRY and workflow.dispute_resolution == DisputeResolution.PENDING:
+                workflow.dispute_stage = DisputeStage.CHARGEBACK_OPEN
+                workflow.dispute_workflow_status = "chargeback_open"
+                workflow.chargeback_received_at = state.current_time
+                workflow.representment_due_at = state.current_time + 18
+                workflow.pre_dispute_due_at = None
+                case.status = "reopened"
+                state.metrics.chargebacks += 1
+                state.metrics.reopens += 1
+                messages.append(f"Inquiry escalated to chargeback for {case.case_id}")
+        elif isinstance(event, PrearbitrationReceivedEvent):
+            assert case is not None
+            workflow = require_refund_workflow(case)
+            if workflow.dispute_resolution == DisputeResolution.PENDING:
+                case.status = "reopened"
+                workflow.dispute_stage = DisputeStage.PRE_ARBITRATION
+                workflow.dispute_workflow_status = "pre_arbitration"
+                workflow.prearbitration_due_at = state.current_time + 10
+                state.metrics.reopens += 1
+                messages.append(f"Pre-arbitration received for {case.case_id}")
         elif isinstance(event, VendorCreditMemoReceivedEvent):
             assert case is not None
             amount = int(round(float(event.amount) * 100))
@@ -174,6 +250,93 @@ def process_due_events(state: WorldState) -> list[str]:
                 state.metrics.reopens += 1
                 state.metrics.cases_resolved = max(0, state.metrics.cases_resolved - 1)
                 messages.append(f"QA sample selected for {case.case_id}")
+        elif isinstance(event, ReserveReleaseDueEvent):
+            assert case is not None
+            workflow = require_refund_workflow(case)
+            if workflow.reserve_percent > 0 and workflow.reserve_release_due_at == event.at_time:
+                if "reserve_release_due" not in case.visible_flags:
+                    case.visible_flags.append("reserve_release_due")
+                messages.append(f"Reserve release review due for {case.case_id}")
+        elif isinstance(event, MonitoringThresholdBreachedEvent):
+            assert case is not None
+            workflow = require_refund_workflow(case)
+            workflow.monitoring_program_status = MonitoringProgramStatus.BREACHED
+            sync_refund_risk_flags(case)
+            messages.append(f"Monitoring threshold breached for {case.case_id}")
+        elif isinstance(event, SanctionsFalsePositiveClearedEvent):
+            assert case is not None
+            workflow = require_kyc_workflow(case)
+            if workflow.sanctions_status == SanctionsStatus.POTENTIAL_MATCH and case.hidden.true_sanctions_false_positive:
+                workflow.sanctions_status = SanctionsStatus.CLEAR
+                workflow.screening_match_confidence = 0.11
+                workflow.payments_frozen = False
+                workflow.payment_freeze_reason = None
+                sync_kyc_flags(case)
+                messages.append(f"Sanctions false positive cleared for {case.case_id}")
+        elif isinstance(event, EDDResponseDueEvent):
+            assert case is not None
+            workflow = require_kyc_workflow(case)
+            if workflow.edd_due_at == event.due_at and workflow.edd_status in {EDDStatus.IN_PROGRESS, EDDStatus.AWAITING_RESPONSE}:
+                if case.pending_info_fields or workflow.correction_fields:
+                    workflow.edd_status = EDDStatus.AWAITING_RESPONSE
+                    if "edd_response_due" not in case.visible_flags:
+                        case.visible_flags.append("edd_response_due")
+                elif workflow.beneficial_owner_status == BeneficialOwnerStatus.NOT_STARTED:
+                    workflow.edd_status = EDDStatus.CLEARED
+                sync_kyc_flags(case)
+                messages.append(f"EDD response due for {case.case_id}")
+        elif isinstance(event, ReportDeadlineMissedEvent):
+            assert case is not None
+            workflow = require_kyc_workflow(case)
+            if workflow.report_due_at == event.at_time and workflow.ofac_report_status != OFACReportStatus.FILED:
+                workflow.ofac_report_status = OFACReportStatus.MISSED
+                workflow.report_due_at = None
+                state.metrics.report_deadlines_missed += 1
+                state.metrics.compliance_violations += 1
+                sync_kyc_flags(case)
+                messages.append(f"OFAC report deadline missed for {case.case_id}")
+        elif isinstance(event, VendorRevisedInvoiceEvent):
+            assert case is not None
+            workflow = require_invoice_workflow(case)
+            if workflow.vendor_response_status == VendorResponseStatus.AWAITING:
+                workflow.vendor_response_status = VendorResponseStatus.RECEIVED
+                if event.revised_amount > 0:
+                    workflow.variance_amount = round(event.revised_amount / 100, 2)
+                messages.append(f"Vendor revised invoice received for {case.case_id}")
+        elif isinstance(event, POChangeApprovedEvent):
+            assert case is not None
+            workflow = require_invoice_workflow(case)
+            if event.approved:
+                workflow.po_change_status = POChangeStatus.APPROVED
+            else:
+                workflow.po_change_status = POChangeStatus.DENIED
+            messages.append(f"PO change {'approved' if event.approved else 'denied'} for {case.case_id}")
+        elif isinstance(event, StopPaymentConfirmedEvent):
+            assert case is not None
+            workflow = require_invoice_workflow(case)
+            if event.success:
+                workflow.payment_batch_status = PaymentBatchStatus.STOPPED
+            else:
+                workflow.payment_batch_status = PaymentBatchStatus.COMPLETED
+            messages.append(f"Stop payment {'succeeded' if event.success else 'failed'} for {case.case_id}")
+        elif isinstance(event, VendorRefundReceivedEvent):
+            assert case is not None
+            workflow = require_invoice_workflow(case)
+            refund = event.refund_amount
+            recoverable = case.hidden.true_recoverable_amount
+            if workflow.recovery_status == RecoveryStatus.NOT_NEEDED:
+                workflow.recovery_status = RecoveryStatus.IN_PROGRESS
+            if refund >= int(round(recoverable * 100)) and recoverable > 0:
+                workflow.recovery_status = RecoveryStatus.COMPLETE
+            elif refund > 0:
+                workflow.recovery_status = RecoveryStatus.PARTIAL
+            messages.append(f"Vendor refund of {refund} received for {case.case_id}")
+        elif isinstance(event, PaymentBatchExecutedEvent):
+            assert case is not None
+            workflow = require_invoice_workflow(case)
+            workflow.payment_batch_status = PaymentBatchStatus.COMPLETED
+            workflow.stop_payment_window_until = None
+            messages.append(f"Payment batch executed for {case.case_id}")
         elif isinstance(event, ArrivalWaveEvent):
             for incoming_case in event.incoming_cases:
                 state.cases[incoming_case.case_id] = incoming_case

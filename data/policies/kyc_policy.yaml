@@ -28,3 +28,40 @@ clauses:
     actions:
       - action_type: defer
         reason_code: awaiting_response
+  - clause_id: sanctions_screen_before_release
+    clause_type: sanctions
+    description: Run sanctions screening before releasing payouts for a merchant under review.
+    mandatory: true
+    conditions:
+      - field: priority
+        operator: gte
+        value: 1
+    actions:
+      - action_type: run_sanctions_screen
+        reason_code: sanctions_match
+  - clause_id: edd_for_owner_anomalies
+    clause_type: due_diligence
+    description: Start EDD and review beneficial owners when onboarding data is incomplete or higher risk.
+    mandatory: true
+    conditions:
+      - field: priority
+        operator: gte
+        value: 1
+    actions:
+      - action_type: start_edd_review
+        reason_code: edd_required
+      - action_type: review_beneficial_owner
+        reason_code: beneficial_owner_mismatch
+  - clause_id: ofac_report_for_confirmed_match
+    clause_type: reporting
+    description: File an OFAC report before closing a confirmed sanctions match.
+    mandatory: true
+    conditions:
+      - field: priority
+        operator: gte
+        value: 1
+    actions:
+      - action_type: freeze_payments
+        reason_code: sanctions_match
+      - action_type: file_ofac_report
+        reason_code: reporting_required

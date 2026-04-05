@@ -1,13 +1,19 @@
 from server.environment import OpsArenaEnvironment
 from opsarena.engine.graders import grade_efficiency, grade_episode, grade_trajectory
+from opsarena.enums import ReasonCode, VerificationDecision
 from opsarena.models import (
     AdvanceClockAction,
     ApproveAction,
     CloseCaseAction,
     FailQAAction,
+    FileOFACReportAction,
+    FreezePaymentsAction,
     OpenCaseAction,
     QueryPolicyAction,
     RebalanceQueueAction,
+    RejectAction,
+    ReviewKYCAction,
+    RunSanctionsScreenAction,
     ScheduleFollowUpAction,
     SendToQAAction,
     SendForSecondaryApprovalAction,
@@ -68,3 +74,19 @@ def test_rebalance_improves_queue_efficiency_signal():
     env.step(RebalanceQueueAction(assignee_pool=["analyst_1", "analyst_2"], max_cases=3, rebalance_strategy="sla_priority"))
     improved = grade_efficiency(env._state)
     assert improved > baseline
+
+
+def test_grader_penalizes_missing_ofac_report_on_sanctions_case():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(OpenCaseAction(case_id="case_kyc_triage"))
+    env.step(QueryPolicyAction(policy_id="kyc_policy"))
+    env.step(RunSanctionsScreenAction(case_id="case_kyc_triage"))
+    env.step(FreezePaymentsAction(case_id="case_kyc_triage", reason_code=ReasonCode.SANCTIONS_MATCH))
+    env.step(ReviewKYCAction(case_id="case_kyc_triage", verification_decision=VerificationDecision.REJECT))
+    env.step(RejectAction(case_id="case_kyc_triage", reason_code=ReasonCode.SANCTIONS_MATCH))
+    assert grade_trajectory(env._state) < 1.0
+
+    env.step(FileOFACReportAction(case_id="case_kyc_triage"))
+    env.step(CloseCaseAction(case_id="case_kyc_triage", resolution_code="done"))
+    assert grade_trajectory(env._state) > 0.8

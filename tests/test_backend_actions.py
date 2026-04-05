@@ -1,35 +1,68 @@
 from server.environment import OpsArenaEnvironment
-from opsarena.domain.workflows.invoice import InvoiceWorkflowState
-from opsarena.enums import MatchStatus, ReasonCode, TargetQueue, VerificationDecision
+from opsarena.domain.workflows.invoice import (
+    CreditMemoStatus,
+    InvoiceWorkflowState,
+    POChangeStatus,
+    PaymentBatchStatus,
+    RecoveryStatus,
+    VendorResponseStatus,
+)
+from opsarena.domain.workflows.kyc import BeneficialOwnerStatus, EDDStatus, OFACReportStatus, SanctionsStatus
+from opsarena.domain.workflows.refund import DisputeStage, MonitoringProgramStatus, PrearbitrationDecision
+from opsarena.enums import MatchStatus, ReasonCode, RecordType, TargetQueue, VerificationDecision
 from opsarena.models import (
     AcceptDisputeAction,
     AdvanceClockAction,
+    ApplyCreditMemoAction,
     ApproveQAAction,
     ApproveAction,
+    ChallengeDisputeAction,
     ClaimCaseAction,
     CloseCaseAction,
+    ClearReserveAction,
     BulkAssignAction,
     BulkRouteAction,
     ExecuteRefundAction,
     FailQAAction,
+    FileOFACReportAction,
+    FreezePaymentsAction,
+    FreezePayoutsAction,
     OpenCaseAction,
     PauseSLAAction,
     PlacePaymentHoldAction,
     RebalanceQueueAction,
     RecordThreeWayMatchAction,
+    RecordVendorRefundAction,
     ReleasePaymentHoldAction,
+    RemoveFromPaymentBatchAction,
+    ResolvePrearbitrationAction,
+    RefundPreDisputeAlertAction,
     RequestCreditMemoAction,
+    RequestPOChangeAction,
+    RequestRevisedInvoiceAction,
     QueryPolicyAction,
+    RejectAction,
+    RequestFieldCorrectionAction,
+    RequestInfoAction,
     ReturnToQueueAction,
     ResumeSLAAction,
+    ReviewBeneficialOwnerAction,
     ReviewKYCAction,
+    RunSanctionsScreenAction,
     RouteCaseAction,
     ScheduleFollowUpAction,
     SendToQAAction,
     SendForSecondaryApprovalAction,
     SendMessageAction,
+    StartEDDReviewAction,
+    StopPaymentAction,
+    SetPayoutDelayDaysAction,
+    SetReservePercentAction,
     SubmitDisputeEvidenceAction,
     TriggerReverificationAction,
+    UnfreezePayoutsAction,
+    ViewRecordAction,
+    WriteOffSmallBalanceAction,
 )
 
 
@@ -338,6 +371,8 @@ def test_qa_sample_selected_reopens_closed_case_for_review():
     env = OpsArenaEnvironment()
     env.reset(task_id="queue_triage", seed=7)
     env.step(OpenCaseAction(case_id="case_refund_1"))
+    env.step(FreezePayoutsAction(case_id="case_refund_1", reason_code=ReasonCode.THRESHOLD_EXCEEDED))
+    env.step(SetReservePercentAction(case_id="case_refund_1", reserve_percent=15.0, release_after_minutes=20))
     env.step(QueryPolicyAction(policy_id="refund_policy"))
     env.step(ApproveAction(case_id="case_refund_1"))
     env.step(
@@ -353,3 +388,364 @@ def test_qa_sample_selected_reopens_closed_case_for_review():
     env.step(AdvanceClockAction(minutes=qa_due - env._state.current_time))
     assert env._state.cases["case_refund_1"].qa_status.value == "pending"
     assert env._state.cases["case_refund_1"].status == "pending_qa"
+
+
+def test_refund_phase3_payout_controls_and_pre_dispute_resolution():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+
+    env.step(OpenCaseAction(case_id="case_refund_1"))
+    env.step(FreezePayoutsAction(case_id="case_refund_1", reason_code=ReasonCode.THRESHOLD_EXCEEDED))
+    env.step(SetReservePercentAction(case_id="case_refund_1", reserve_percent=15.0, release_after_minutes=20))
+    env.step(SetPayoutDelayDaysAction(case_id="case_refund_1", payout_delay_days=7))
+    refund_one = env._state.cases["case_refund_1"].workflow
+    assert refund_one.payout_frozen is True
+    assert refund_one.reserve_percent == 15.0
+    assert refund_one.payout_delay_days == 7
+
+    reserve_due = min(event.at_time for event in env._state.scheduled_events if event.event_type == "reserve_release_due")
+    env.step(AdvanceClockAction(minutes=reserve_due - env._state.current_time))
+    assert "reserve_release_due" in env._state.cases["case_refund_1"].visible_flags
+
+    env._state.cases["case_refund_1"].workflow.monitoring_program_status = MonitoringProgramStatus.WARNING
+    env._state.cases["case_refund_1"].workflow.merchant_dispute_ratio_30d = 0.003
+    env._state.cases["case_refund_1"].workflow.merchant_fraud_ratio_30d = 0.0
+    env._state.cases["case_refund_1"].workflow.merchant_negative_balance = False
+    env.step(ClearReserveAction(case_id="case_refund_1"))
+    env.step(UnfreezePayoutsAction(case_id="case_refund_1"))
+    assert env._state.cases["case_refund_1"].workflow.reserve_percent == 0.0
+    assert env._state.cases["case_refund_1"].workflow.payout_frozen is False
+
+    pre_dispute_env = OpsArenaEnvironment()
+    pre_dispute_env.reset(task_id="queue_triage", seed=7)
+    pre_dispute_env.step(OpenCaseAction(case_id="case_refund_2"))
+    resolved = pre_dispute_env.step(RefundPreDisputeAlertAction(case_id="case_refund_2"))
+    assert resolved.case_detail is not None
+    assert resolved.case_detail.workflow_metadata["dispute_stage"] == "finalized"
+    assert resolved.case_detail.workflow_metadata["refund_execution_state"] == "refunded"
+
+
+def test_refund_phase3_inquiry_and_prearbitration_flows_progress_via_events():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+
+    inquiry_due = min(event.at_time for event in env._state.scheduled_events if event.event_type == "inquiry_escalates_to_chargeback")
+    env.step(AdvanceClockAction(minutes=inquiry_due - env._state.current_time))
+    refund_two = env._state.cases["case_refund_2"].workflow
+    assert refund_two.dispute_stage == DisputeStage.CHARGEBACK_OPEN
+
+    env.reset(task_id="refund_exception", seed=2)
+    env._state.cases["case_refund_1"].hidden.true_dispute_should_accept = False
+    env.step(OpenCaseAction(case_id="case_refund_1"))
+    env.step(
+        SubmitDisputeEvidenceAction(
+            case_id="case_refund_1",
+            evidence_fields=["customer_communication"],
+        )
+    )
+    prearb_due = min(event.at_time for event in env._state.scheduled_events if event.event_type == "prearbitration_received")
+    env.step(AdvanceClockAction(minutes=prearb_due - env._state.current_time))
+    assert env._state.cases["case_refund_1"].workflow.dispute_stage == DisputeStage.PRE_ARBITRATION
+
+    accepted = env.step(
+        ResolvePrearbitrationAction(
+            case_id="case_refund_1",
+            prearbitration_decision=PrearbitrationDecision.ACCEPT,
+        )
+    )
+    assert accepted.case_detail is not None
+    assert accepted.case_detail.workflow_metadata["dispute_resolution"] == "accepted"
+
+
+def test_challenge_dispute_resolves_inquiry_when_evidence_is_strong():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env._state.cases["case_refund_2"].hidden.true_dispute_should_accept = False
+    env._state.cases["case_refund_2"].gather_evidence("order_history")
+    env._state.cases["case_refund_2"].gather_evidence("customer_profile")
+    env._state.cases["case_refund_2"].gather_evidence("refund_policy")
+
+    env.step(OpenCaseAction(case_id="case_refund_2"))
+    challenged = env.step(ChallengeDisputeAction(case_id="case_refund_2"))
+    assert challenged.case_detail is not None
+    assert challenged.case_detail.workflow_metadata["dispute_resolution"] == "won"
+
+
+def test_phase4_kyc_false_positive_and_beneficial_owner_flow_clears_for_approval():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="invoice_plus_kyc", seed=3)
+    env.step(OpenCaseAction(case_id="case_kyc_1"))
+
+    screened = env.step(RunSanctionsScreenAction(case_id="case_kyc_1"))
+    assert screened.case_detail is not None
+    assert screened.case_detail.workflow_metadata["sanctions_status"] == "potential_match"
+
+    env.step(StartEDDReviewAction(case_id="case_kyc_1"))
+    correction = env.step(RequestFieldCorrectionAction(case_id="case_kyc_1", field_name="owners.1.address"))
+    assert correction.case_detail is not None
+    assert correction.case_detail.workflow_metadata["beneficial_owner_status"] == "needs_correction"
+
+    env.step(RequestInfoAction(case_id="case_kyc_1", field_name="individual.verification.document"))
+    while env._state.cases["case_kyc_1"].pending_info_fields:
+        next_due = min(
+            event.at_time
+            for event in env._state.scheduled_events
+            if event.case_id == "case_kyc_1"
+        )
+        env.step(AdvanceClockAction(minutes=next_due - env._state.current_time))
+
+    workflow = env._state.cases["case_kyc_1"].workflow
+    assert workflow.sanctions_status == SanctionsStatus.CLEAR
+    assert workflow.beneficial_owner_status == BeneficialOwnerStatus.PENDING_REVIEW
+
+    owners = env.step(
+        ReviewBeneficialOwnerAction(
+            case_id="case_kyc_1",
+            verification_decision=VerificationDecision.APPROVE,
+        )
+    )
+    assert owners.case_detail is not None
+    assert owners.case_detail.workflow_metadata["edd_status"] == "cleared"
+
+    env.step(ViewRecordAction(record_type=RecordType.KYC_DOCUMENT, record_id="kyc_3001"))
+    reviewed = env.step(
+        ReviewKYCAction(
+            case_id="case_kyc_1",
+            verification_decision=VerificationDecision.APPROVE,
+        )
+    )
+    assert reviewed.case_detail is not None
+    assert reviewed.case_detail.workflow_metadata["kyc_stage"] == "cleared"
+
+    approved = env.step(ApproveAction(case_id="case_kyc_1"))
+    assert approved.error is None
+    assert env._state.cases["case_kyc_1"].resolution.value == "approved"
+
+
+def test_phase4_kyc_confirmed_match_requires_report_and_freeze_before_close():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(OpenCaseAction(case_id="case_kyc_triage"))
+
+    screened = env.step(RunSanctionsScreenAction(case_id="case_kyc_triage"))
+    assert screened.case_detail is not None
+    assert screened.case_detail.workflow_metadata["sanctions_status"] == "confirmed_match"
+    assert screened.case_detail.workflow_metadata["ofac_report_status"] == "pending"
+
+    env.step(FreezePaymentsAction(case_id="case_kyc_triage", reason_code=ReasonCode.SANCTIONS_MATCH))
+    env.step(ReviewKYCAction(case_id="case_kyc_triage", verification_decision=VerificationDecision.REJECT))
+    env.step(RejectAction(case_id="case_kyc_triage", reason_code=ReasonCode.SANCTIONS_MATCH))
+
+    blocked = env.step(CloseCaseAction(case_id="case_kyc_triage", resolution_code="blocked"))
+    assert blocked.error is not None
+
+    filed = env.step(FileOFACReportAction(case_id="case_kyc_triage"))
+    assert filed.case_detail is not None
+    assert filed.case_detail.workflow_metadata["ofac_report_status"] == "filed"
+
+    closed = env.step(CloseCaseAction(case_id="case_kyc_triage", resolution_code="done"))
+    assert closed.error is None
+    assert env._state.cases["case_kyc_triage"].status == "closed"
+
+
+def test_phase4_kyc_report_deadline_miss_records_compliance_violation():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(OpenCaseAction(case_id="case_kyc_triage"))
+    env.step(RunSanctionsScreenAction(case_id="case_kyc_triage"))
+
+    due_at = env._state.cases["case_kyc_triage"].workflow.report_due_at
+    assert due_at is not None
+    env.step(AdvanceClockAction(minutes=due_at - env._state.current_time))
+
+    workflow = env._state.cases["case_kyc_triage"].workflow
+    assert workflow.ofac_report_status == OFACReportStatus.MISSED
+    assert env._state.metrics.report_deadlines_missed == 1
+    assert env._state.metrics.compliance_violations == 1
+
+
+def test_phase5_request_revised_invoice_schedules_vendor_response():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(OpenCaseAction(case_id="case_invoice_1"))
+
+    result = env.step(
+        RequestRevisedInvoiceAction(
+            case_id="case_invoice_1",
+            reason_code=ReasonCode.MISSING_DOCUMENTATION,
+        )
+    )
+    assert result.error is None
+    workflow = env._state.cases["case_invoice_1"].workflow
+    assert isinstance(workflow, InvoiceWorkflowState)
+    assert workflow.vendor_response_status == VendorResponseStatus.AWAITING
+
+    latency = env._state.cases["case_invoice_1"].hidden.true_vendor_response_minutes
+    env.step(AdvanceClockAction(minutes=latency))
+    workflow = env._state.cases["case_invoice_1"].workflow
+    assert workflow.vendor_response_status == VendorResponseStatus.RECEIVED
+
+
+def test_phase5_request_po_change_schedules_approval():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(OpenCaseAction(case_id="case_invoice_1"))
+
+    result = env.step(
+        RequestPOChangeAction(
+            case_id="case_invoice_1",
+            change_description="Adjust quantity to match delivery",
+        )
+    )
+    assert result.error is None
+    workflow = env._state.cases["case_invoice_1"].workflow
+    assert isinstance(workflow, InvoiceWorkflowState)
+    assert workflow.po_change_status == POChangeStatus.PENDING_APPROVAL
+
+    env.step(AdvanceClockAction(minutes=15))
+    workflow = env._state.cases["case_invoice_1"].workflow
+    assert workflow.po_change_status == POChangeStatus.APPROVED
+
+
+def test_phase5_remove_from_payment_batch_clears_batch():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(OpenCaseAction(case_id="case_invoice_1"))
+
+    workflow = env._state.cases["case_invoice_1"].workflow
+    assert isinstance(workflow, InvoiceWorkflowState)
+    assert workflow.payment_batch_status == PaymentBatchStatus.SCHEDULED
+
+    result = env.step(RemoveFromPaymentBatchAction(case_id="case_invoice_1"))
+    assert result.error is None
+    workflow = env._state.cases["case_invoice_1"].workflow
+    assert workflow.payment_batch_status == PaymentBatchStatus.NOT_SCHEDULED
+    assert workflow.payment_batch_id is None
+
+
+def test_phase5_stop_payment_requires_in_progress_batch():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(OpenCaseAction(case_id="case_invoice_1"))
+
+    result = env.step(StopPaymentAction(case_id="case_invoice_1"))
+    assert result.error is not None
+
+    env._state.cases["case_invoice_1"].workflow.payment_batch_status = PaymentBatchStatus.IN_PROGRESS
+    result = env.step(StopPaymentAction(case_id="case_invoice_1"))
+    assert result.error is None
+
+    env.step(AdvanceClockAction(minutes=5))
+    workflow = env._state.cases["case_invoice_1"].workflow
+    assert workflow.payment_batch_status in {PaymentBatchStatus.STOPPED, PaymentBatchStatus.COMPLETED}
+
+
+def test_phase5_record_vendor_refund_updates_recovery():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(OpenCaseAction(case_id="case_invoice_1"))
+
+    result = env.step(
+        RecordVendorRefundAction(case_id="case_invoice_1", refund_amount=24.5)
+    )
+    assert result.error is None
+    workflow = env._state.cases["case_invoice_1"].workflow
+    assert isinstance(workflow, InvoiceWorkflowState)
+    assert workflow.recovery_status == RecoveryStatus.COMPLETE
+
+
+def test_phase5_apply_credit_memo_requires_received_status():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(OpenCaseAction(case_id="case_invoice_1"))
+
+    result = env.step(
+        ApplyCreditMemoAction(case_id="case_invoice_1", credit_memo_id="cm_fake")
+    )
+    assert result.error is not None
+
+    env.step(RequestCreditMemoAction(case_id="case_invoice_1", approved_amount=24.5))
+    env.step(AdvanceClockAction(minutes=env._state.cases["case_invoice_1"].hidden.hidden_response_latency_minutes or 30))
+
+    workflow = env._state.cases["case_invoice_1"].workflow
+    assert isinstance(workflow, InvoiceWorkflowState)
+    assert workflow.credit_memo_status == CreditMemoStatus.RECEIVED
+
+    memo_id = next(
+        r.record_id
+        for r in env._state.cases["case_invoice_1"].linked_records
+        if r.record_type.value == "credit_memo"
+    )
+    result = env.step(ApplyCreditMemoAction(case_id="case_invoice_1", credit_memo_id=memo_id))
+    assert result.error is None
+    workflow = env._state.cases["case_invoice_1"].workflow
+    assert workflow.credit_memo_status == CreditMemoStatus.APPLIED
+    assert workflow.recovery_status == RecoveryStatus.COMPLETE
+
+
+def test_phase5_write_off_small_balance_resolves_case():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(OpenCaseAction(case_id="case_invoice_1"))
+
+    workflow = env._state.cases["case_invoice_1"].workflow
+    assert isinstance(workflow, InvoiceWorkflowState)
+    workflow.variance_amount = 25.0
+
+    result = env.step(
+        WriteOffSmallBalanceAction(
+            case_id="case_invoice_1",
+            reason_code=ReasonCode.COMPLETE,
+        )
+    )
+    assert result.error is None
+    assert env._state.cases["case_invoice_1"].resolution.value == "approved"
+    assert env._state.cases["case_invoice_1"].status == "resolved"
+    workflow = env._state.cases["case_invoice_1"].workflow
+    assert workflow.recovery_status == RecoveryStatus.COMPLETE
+
+
+def test_phase5_write_off_rejects_large_balance():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(OpenCaseAction(case_id="case_invoice_1"))
+
+    workflow = env._state.cases["case_invoice_1"].workflow
+    assert isinstance(workflow, InvoiceWorkflowState)
+    workflow.variance_amount = 100.0
+
+    result = env.step(
+        WriteOffSmallBalanceAction(
+            case_id="case_invoice_1",
+            reason_code=ReasonCode.COMPLETE,
+        )
+    )
+    assert result.error is not None
+
+
+def test_phase5_payment_batch_executed_event_closes_stop_window():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    env.step(OpenCaseAction(case_id="case_invoice_1"))
+
+    from opsarena.domain.events import PaymentBatchExecutedEvent
+    from opsarena.engine.scheduler import schedule_event
+
+    workflow = env._state.cases["case_invoice_1"].workflow
+    assert isinstance(workflow, InvoiceWorkflowState)
+    workflow.payment_batch_status = PaymentBatchStatus.IN_PROGRESS
+    workflow.stop_payment_window_until = env._state.current_time + 20
+
+    schedule_event(
+        env._state,
+        PaymentBatchExecutedEvent(
+            at_time=env._state.current_time + 10,
+            case_id="case_invoice_1",
+            batch_id="batch_001",
+        ),
+    )
+    env.step(AdvanceClockAction(minutes=10))
+
+    workflow = env._state.cases["case_invoice_1"].workflow
+    assert workflow.payment_batch_status == PaymentBatchStatus.COMPLETED
+    assert workflow.stop_payment_window_until is None

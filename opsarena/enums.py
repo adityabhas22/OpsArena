@@ -2,7 +2,21 @@ from __future__ import annotations
 
 from enum import IntEnum, StrEnum
 
-from .rewards import CaseType, Resolution
+
+class CaseType(StrEnum):
+    REFUND = "refund"
+    INVOICE = "invoice"
+    KYC = "kyc"
+    TRIAGE = "triage"
+
+
+class Resolution(StrEnum):
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    ESCALATED = "escalated"
+    DEFERRED = "deferred"
+    CLOSED = "closed"
+    PENDING = "pending"
 
 
 class RecordType(StrEnum):
@@ -35,6 +49,10 @@ class ReasonCode(StrEnum):
     CUSTOMER_REQUEST = "customer_request"
     DUPLICATE_MATCH = "duplicate_match"
     INVALID_DOCUMENT = "invalid_document"
+    SANCTIONS_MATCH = "sanctions_match"
+    BENEFICIAL_OWNER_MISMATCH = "beneficial_owner_mismatch"
+    EDD_REQUIRED = "edd_required"
+    REPORTING_REQUIRED = "reporting_required"
     AWAITING_RESPONSE = "awaiting_response"
     SLA_PROTECTION = "sla_protection"
     COMPLETE = "complete"

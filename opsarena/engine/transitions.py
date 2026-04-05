@@ -58,6 +58,10 @@ def apply_action(state: WorldState, action: OpsAction) -> TransitionResult:
         if case:
             t_total = getattr(case.workflow, "sla_total", max(1, case.sla_deadline - case.created_at))
             t_remaining = case.sla_deadline - state.current_time
+            # If the case was already past SLA before this step, the breach
+            # fixed penalty was already applied — only charge the marginal cost.
+            prev_t_remaining = (prev_case.sla_deadline - (state.current_time - tool_time_cost(action))) if prev_case else t_remaining
+            already_breached = prev_t_remaining < 0
             reward_breakdown = compute_step_reward(
                 case=case,
                 queue=state.queue_state(),
@@ -65,6 +69,7 @@ def apply_action(state: WorldState, action: OpsAction) -> TransitionResult:
                 episode_metrics=state.metrics,
                 t_remaining=t_remaining,
                 t_total=t_total,
+                already_breached=already_breached,
                 evidence_type=case.evidence_types_gathered[-1] if case.evidence_types_gathered else None,
                 evidence_items_before=prev_case.evidence_items_gathered if prev_case else 0,
                 evidence_items_after=case.evidence_items_gathered,

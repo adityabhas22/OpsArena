@@ -25,102 +25,89 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
+
+from opsarena.enums import CaseType, Resolution
 
 
 # ---------------------------------------------------------------------------
-# Type stubs for state objects (will be replaced by real state module)
+# Structural protocols for state objects passed to reward functions.
+# These define the contract without coupling to Pydantic models.
 # ---------------------------------------------------------------------------
 
-class CaseType(Enum):
-    REFUND = "refund"
-    INVOICE = "invoice"
-    KYC = "kyc"
-    TRIAGE = "triage"
+@runtime_checkable
+class HiddenStateProto(Protocol):
+    true_fraud_risk: float
+    true_is_duplicate: bool
+    true_doc_valid: bool
+    true_downstream_loss: float
+    true_dispute_should_accept: bool
+    true_sanctions_match: bool
+    true_sanctions_false_positive: bool
+    true_edd_required: bool
+    true_ofac_report_required: bool
 
 
-class Resolution(Enum):
-    APPROVED = "approved"
-    REJECTED = "rejected"
-    ESCALATED = "escalated"
-    DEFERRED = "deferred"
-    CLOSED = "closed"
-    PENDING = "pending"
-
-
-@dataclass
-class CaseState:
+@runtime_checkable
+class CaseProto(Protocol):
     case_id: str
     case_type: CaseType
     status: str
-    priority: int                    # 1 (highest) - 5 (lowest)
-    sla_deadline: int                # simulated time (minutes from epoch)
+    priority: int
+    sla_deadline: int
     created_at: int
-    resolution: Resolution = Resolution.PENDING
-    amount: float = 0.0             # dollar value of the case
-    # Evidence gathering state
-    checks_required: int = 0
-    checks_completed: int = 0
-    evidence_items_available: int = 0
-    evidence_items_gathered: int = 0
-    # Communication state
-    notifications_required: int = 0
-    notifications_sent: int = 0
-    # Hidden ground truth (available to reward but not agent)
-    true_fraud_risk: float = 0.0     # 0.0 - 1.0
-    true_is_duplicate: bool = False
-    true_doc_valid: bool = True
-    true_downstream_loss: float = 0.0
-    # Flags
-    policy_checked: bool = False
-    customer_notified: bool = False
-    escalation_justified: bool = False
-    kyc_complete: bool = False
+    resolution: Resolution
+    amount: float
+    checks_required: int
+    checks_completed: int
+    evidence_items_available: int
+    evidence_items_gathered: int
+    evidence_types_gathered: list[str]
+    notifications_required: int
+    notifications_sent: int
+    policy_checked: bool
+    customer_notified: bool
+    escalation_justified: bool
+    qa_required: bool
+    hidden: HiddenStateProto
+    workflow: Any
+    visible_flags: list[str]
 
 
-@dataclass
-class QueueState:
-    cases: list[CaseState] = field(default_factory=list)
-    current_time: int = 0
-    escalation_queue_load: int = 0      # number of cases in human queue
-    escalation_queue_capacity: int = 10
-    total_cases_resolved: int = 0
-    total_sla_breaches: int = 0
+@runtime_checkable
+class QueueProto(Protocol):
+    cases: list[Any]
+    current_time: int
+    escalation_queue_load: int
+    escalation_queue_capacity: int
+    total_cases_resolved: int
+    total_sla_breaches: int
+    exception_queue_size: int
+    unassigned_count: int
+    overdue_follow_ups: int
 
 
-@dataclass
-class EpisodeMetrics:
-    """Accumulated metrics across the episode for queue-level rewards."""
-    cases_resolved: int = 0
-    cases_breached: int = 0
-    total_resolution_value: float = 0.0
-    total_penalty: float = 0.0
-    escalation_count: int = 0
-    tool_calls: int = 0
-    simulated_minutes: int = 0
-    cascading_events_triggered: int = 0
-    reopens: int = 0
-    chargebacks: int = 0
-    duplicate_payments: int = 0
-    compliance_violations: int = 0
+@runtime_checkable
+class EpisodeMetricsProto(Protocol):
+    cases_resolved: int
+    cases_breached: int
+    chargebacks: int
+    compliance_violations: int
 
 
-def _case_attr(case: Any, attr: str, default: Any = None) -> Any:
-    if hasattr(case, attr):
-        return getattr(case, attr)
-    hidden = getattr(case, "hidden", None)
-    if hidden is not None and hasattr(hidden, attr):
-        return getattr(hidden, attr)
-    workflow = getattr(case, "workflow", None)
-    if workflow is not None and hasattr(workflow, attr):
-        return getattr(workflow, attr)
-    return default
+# ---------------------------------------------------------------------------
+# Typed accessors for hidden and workflow attributes
+# ---------------------------------------------------------------------------
+
+def _hidden(case: CaseProto, attr: str, default: Any = None) -> Any:
+    """Access a hidden-state attribute."""
+    return getattr(case.hidden, attr, default)
 
 
-def _workflow_value(case: Any, attr: str, default: Any = None) -> Any:
-    value = _case_attr(case, attr, default)
-    return getattr(value, "value", value)
+def _wf(case: CaseProto, attr: str, default: Any = None) -> Any:
+    """Access a workflow-state attribute, stripping enum .value if present."""
+    val = getattr(case.workflow, attr, default)
+    return getattr(val, "value", val)
 
 
 # ============================================================================
@@ -183,8 +170,8 @@ class RefundRewardParams:
 
 
 def compute_refund_reward(
-    case: CaseState,
-    queue: QueueState,
+    case: CaseProto,
+    queue: QueueProto,
     params: RefundRewardParams | None = None,
 ) -> dict[str, float]:
     """
@@ -196,11 +183,19 @@ def compute_refund_reward(
     breakdown: dict[str, float] = {}
 
     # --- Decision reward ---
-    true_fraud_risk = float(_case_attr(case, "true_fraud_risk", 0.0))
+    true_fraud_risk = float(_hidden(case, "true_fraud_risk", 0.0))
     is_fraud = true_fraud_risk > 0.5  # threshold for "actually fraudulent"
 
+    # Check if this is a dispute-acceptance scenario where accepting is
+    # the economically correct action (e.g., low-dollar dispute where
+    # fighting costs more than accepting).
+    dispute_should_accept = bool(_hidden(case, "true_dispute_should_accept", False))
+
     if case.resolution == Resolution.APPROVED:
-        if not is_fraud:
+        if dispute_should_accept:
+            # Correct dispute acceptance: economically rational decision
+            breakdown["decision"] = p.correct_approval_base * 0.8
+        elif not is_fraud:
             # Correct approval: retain customer
             base = p.correct_approval_base + p.amount_multiplier_approval * case.amount
             # Scale by customer quality (proxy: inverse of fraud risk)
@@ -307,8 +302,8 @@ class InvoiceRewardParams:
 
 
 def compute_invoice_reward(
-    case: CaseState,
-    queue: QueueState,
+    case: CaseProto,
+    queue: QueueProto,
     days_to_resolve: float = 0.0,
     discount_window_remaining: float = 0.0,
     unnecessary_doc_requests: int = 0,
@@ -318,7 +313,7 @@ def compute_invoice_reward(
     p = params or InvoiceRewardParams()
     breakdown: dict[str, float] = {}
 
-    is_duplicate = bool(_case_attr(case, "true_is_duplicate", False))
+    is_duplicate = bool(_hidden(case, "true_is_duplicate", False))
 
     # --- Match quality ---
     if case.resolution == Resolution.APPROVED:
@@ -431,8 +426,8 @@ class KYCRewardParams:
 
 
 def compute_kyc_reward(
-    case: CaseState,
-    queue: QueueState,
+    case: CaseProto,
+    queue: QueueProto,
     hours_to_resolve: float = 0.0,
     sla_hours: float = 8.0,
     correct_doc_requests: int = 0,
@@ -451,10 +446,24 @@ def compute_kyc_reward(
     }.get(risk_tier, 1.0)
 
     # --- Compliance ---
+    sanctions_match = bool(_hidden(case, "true_sanctions_match", False))
+    sanctions_status = _wf(case, "sanctions_status", "not_started")
+    edd_status = _wf(case, "edd_status", "not_started")
+    beneficial_owner_status = _wf(case, "beneficial_owner_status", "not_started")
+    report_status = _wf(case, "ofac_report_status", "not_required")
+    payments_frozen = bool(_wf(case, "payments_frozen", False))
     if case.resolution == Resolution.APPROVED:
-        kyc_complete = bool(_case_attr(case, "kyc_complete", False))
-        true_doc_valid = bool(_case_attr(case, "true_doc_valid", True))
-        if kyc_complete and true_doc_valid:
+        kyc_complete = bool(_wf(case, "kyc_complete", False))
+        true_doc_valid = bool(_hidden(case, "true_doc_valid", True))
+        if (
+            kyc_complete
+            and true_doc_valid
+            and sanctions_status == "clear"
+            and edd_status in {"not_required", "cleared"}
+            and beneficial_owner_status in {"not_started", "verified"}
+            and report_status in {"not_required", "filed"}
+            and not payments_frozen
+        ):
             breakdown["compliance"] = p.approved_with_complete_kyc
         elif not kyc_complete:
             # CATASTROPHIC: approved without complete KYC
@@ -463,11 +472,15 @@ def compute_kyc_reward(
             # Approved with invalid documents
             breakdown["compliance"] = p.approved_invalid_docs * tier_mult
     elif case.resolution == Resolution.DEFERRED:
-        breakdown["compliance"] = p.correctly_held_pending
+        breakdown["compliance"] = p.correctly_held_pending + (
+            2.0 if sanctions_status in {"potential_match", "confirmed_match"} or edd_status in {"in_progress", "awaiting_response"} else 0.0
+        )
     elif case.resolution == Resolution.ESCALATED:
         breakdown["compliance"] = 1.0 if case.escalation_justified else -2.0
     elif case.resolution == Resolution.REJECTED:
-        if not bool(_case_attr(case, "true_doc_valid", True)):
+        if sanctions_match:
+            breakdown["compliance"] = 9.0 if report_status == "filed" and payments_frozen else 2.0
+        elif not bool(_hidden(case, "true_doc_valid", True)):
             breakdown["compliance"] = 5.0  # correct rejection of bad docs
         else:
             breakdown["compliance"] = -8.0  # wrongly rejected valid applicant
@@ -561,8 +574,8 @@ class TriageRewardParams:
 
 
 def compute_triage_reward(
-    queue: QueueState,
-    cases_resolved_this_step: list[CaseState],
+    queue: QueueProto,
+    cases_resolved_this_step: list[CaseProto],
     priority_inversions: int = 0,
     utilization_ratio: float = 0.0,
     idle_periods: int = 0,
@@ -706,6 +719,7 @@ def compute_time_reward(
     t_remaining: float,
     t_total: float,
     priority: int = 3,
+    already_breached: bool = False,
     params: TimePressureParams | None = None,
 ) -> dict[str, float]:
     """
@@ -715,6 +729,8 @@ def compute_time_reward(
         t_remaining: minutes until SLA deadline (negative = breached)
         t_total: original SLA window in minutes
         priority: case priority (1-5)
+        already_breached: if True, the breach_fixed_penalty was already applied
+            on a prior step, so only apply the per-minute overshoot.
     """
     p = params or TimePressureParams()
     breakdown: dict[str, float] = {}
@@ -727,13 +743,16 @@ def compute_time_reward(
         breakdown["time_pressure"] = p.max_pre_breach_penalty * pressure * priority_mult
         breakdown["breach_penalty"] = 0.0
     else:
-        # Breached: fixed penalty + per-minute overshoot
+        # Breached: fixed penalty once + small per-minute overshoot
         breakdown["time_pressure"] = p.max_pre_breach_penalty * priority_mult
         minutes_over = abs(t_remaining)
-        breakdown["breach_penalty"] = (
-            (p.breach_fixed_penalty + p.breach_per_minute * minutes_over)
-            * priority_mult
-        )
+        if already_breached:
+            # Only the marginal per-minute cost, not the fixed penalty again
+            breakdown["breach_penalty"] = p.breach_per_minute * min(minutes_over, t_total) * priority_mult
+        else:
+            breakdown["breach_penalty"] = (
+                p.breach_fixed_penalty + p.breach_per_minute * min(minutes_over, t_total)
+            ) * priority_mult
 
     breakdown["total"] = sum(breakdown.values())
     return breakdown
@@ -876,7 +895,7 @@ def decision_confidence(
 
 
 def compute_voi_reward(
-    case: CaseState,
+    case: CaseProto,
     evidence_type: str,
     items_before: int,
     items_after: int,
@@ -1002,11 +1021,11 @@ class QueueRewardParams:
 
 
 def compute_queue_reward(
-    queue: QueueState,
+    queue: QueueProto,
     initial_case_count: int,
     initial_backlog: int,
-    resolved_cases: list[CaseState],
-    remaining_cases: list[CaseState],
+    resolved_cases: list[CaseProto],
+    remaining_cases: list[CaseProto],
     priority_inversions: int = 0,
     params: QueueRewardParams | None = None,
 ) -> dict[str, float]:
@@ -1046,7 +1065,7 @@ def compute_queue_reward(
 
     # --- Risk concentration (Herfindahl-like index) ---
     if remaining_cases:
-        risk_scores = [float(_case_attr(c, "true_fraud_risk", 0.0)) + (0.3 if c.priority <= 2 else 0.0)
+        risk_scores = [float(_hidden(c, "true_fraud_risk", 0.0)) + (0.3 if c.priority <= 2 else 0.0)
                        for c in remaining_cases]
         total_risk = sum(risk_scores) or 1.0
         shares = [r / total_risk for r in risk_scores]
@@ -1344,7 +1363,7 @@ class CascadeParams:
 
 
 def compute_escalation_cascade(
-    queue: QueueState,
+    queue: QueueProto,
     new_escalation: bool = False,
     params: CascadeParams | None = None,
 ) -> dict[str, float]:
@@ -1517,6 +1536,74 @@ def compute_qa_cascade(
     return breakdown
 
 
+def compute_kyc_compliance_cascade(case: CaseProto, action_type: str) -> dict[str, float]:
+    breakdown: dict[str, float] = {}
+    sanctions_match = bool(_hidden(case, "true_sanctions_match", False))
+    false_positive = bool(_hidden(case, "true_sanctions_false_positive", False))
+    edd_required = bool(_hidden(case, "true_edd_required", False))
+    report_required = bool(_hidden(case, "true_ofac_report_required", False))
+    sanctions_status = _wf(case, "sanctions_status", "not_started")
+    edd_status = _wf(case, "edd_status", "not_started")
+    beneficial_owner_status = _wf(case, "beneficial_owner_status", "not_started")
+    report_status = _wf(case, "ofac_report_status", "not_required")
+    payments_frozen = bool(_wf(case, "payments_frozen", False))
+
+    score = 0.0
+    if action_type == "run_sanctions_screen":
+        score = 3.0 if sanctions_status in {"clear", "potential_match", "confirmed_match"} else -1.0
+    elif action_type == "start_edd_review":
+        score = 3.0 if edd_required and edd_status in {"in_progress", "awaiting_response", "cleared"} else -1.5
+    elif action_type == "review_beneficial_owner":
+        score = 3.0 if beneficial_owner_status in {"verified", "needs_correction", "rejected"} else -1.0
+    elif action_type == "request_field_correction":
+        score = 2.5 if _wf(case, "correction_fields", []) else -1.0
+    elif action_type == "freeze_payments":
+        score = 4.0 if sanctions_match and payments_frozen else (-0.5 if false_positive else -2.0)
+    elif action_type == "file_ofac_report":
+        score = 5.0 if report_required and report_status == "filed" else -2.0
+
+    breakdown["kyc_compliance_cascade"] = score
+    breakdown["total"] = score
+    return breakdown
+
+
+def compute_refund_risk_cascade(case: CaseProto, action_type: str) -> dict[str, float]:
+    breakdown: dict[str, float] = {}
+    dispute_should_accept = bool(_hidden(case, "true_dispute_should_accept", False))
+    monitoring_status = _wf(case, "monitoring_program_status", "normal")
+    merchant_risk_level = _wf(case, "merchant_risk_level", "normal")
+    reserve_percent = float(_wf(case, "reserve_percent", 0.0) or 0.0)
+    payout_delay_days = int(_wf(case, "payout_delay_days", 0) or 0)
+    payout_frozen = bool(_wf(case, "payout_frozen", False))
+    reserve_due = _wf(case, "reserve_release_due_at", None)
+    strong_packet = len(_wf(case, "dispute_evidence_fields", []) or []) >= 2 or case.evidence_items_gathered >= 3
+
+    score = 0.0
+    if action_type == "refund_pre_dispute_alert":
+        score = 6.0 if dispute_should_accept else -4.0
+    elif action_type == "challenge_dispute":
+        score = 5.0 if (not dispute_should_accept and strong_packet) else -3.0
+    elif action_type == "resolve_prearbitration":
+        score = 5.0 if (not dispute_should_accept and strong_packet) or dispute_should_accept else -3.0
+    elif action_type == "freeze_payouts":
+        score = 4.0 if monitoring_status == "breached" or merchant_risk_level == "critical" else -2.0
+    elif action_type == "unfreeze_payouts":
+        score = 3.0 if monitoring_status != "breached" and reserve_percent == 0.0 else -3.0
+    elif action_type == "set_reserve_percent":
+        score = 3.5 if merchant_risk_level in {"high", "critical"} and reserve_percent >= 10.0 else -2.0
+    elif action_type == "clear_reserve":
+        score = 2.0 if reserve_due is not None and monitoring_status != "breached" else -2.5
+    elif action_type == "set_payout_delay_days":
+        score = 3.0 if merchant_risk_level in {"elevated", "high", "critical"} and payout_delay_days > 0 else -1.5
+
+    if payout_frozen and monitoring_status == "breached":
+        score += 0.5
+
+    breakdown["refund_risk_cascade"] = score
+    breakdown["total"] = score
+    return breakdown
+
+
 # ============================================================================
 # SECTION 7: COMBINED REWARD ORCHESTRATOR
 # ============================================================================
@@ -1549,12 +1636,13 @@ class RewardBreakdown:
 
 
 def compute_step_reward(
-    case: CaseState,
-    queue: QueueState,
+    case: CaseProto,
+    queue: QueueProto,
     action_type: str,
-    episode_metrics: EpisodeMetrics,
+    episode_metrics: EpisodeMetricsProto,
     t_remaining: float | None = None,
     t_total: float | None = None,
+    already_breached: bool = False,
     evidence_type: str | None = None,
     evidence_items_before: int = 0,
     evidence_items_after: int = 0,
@@ -1575,7 +1663,15 @@ def compute_step_reward(
     result = RewardBreakdown(case_id=case.case_id, case_type=case.case_type)
 
     # --- Per-workflow reward (only on resolution actions) ---
-    if action_type in ("approve", "reject", "escalate", "close_case", "accept_dispute"):
+    resolution_actions = {
+        "approve",
+        "reject",
+        "escalate",
+        "close_case",
+        "accept_dispute",
+        "refund_pre_dispute_alert",
+    }
+    if action_type in resolution_actions or (action_type == "resolve_prearbitration" and case.resolution != Resolution.PENDING):
         if case.case_type == CaseType.REFUND:
             result.workflow_reward = compute_refund_reward(case, queue)
         elif case.case_type == CaseType.INVOICE:
@@ -1587,7 +1683,8 @@ def compute_step_reward(
     # --- Time pressure (on every step) ---
     if t_remaining is not None and t_total is not None:
         result.time_reward = compute_time_reward(
-            t_remaining, t_total, case.priority
+            t_remaining, t_total, case.priority,
+            already_breached=already_breached,
         )
 
     # --- VOI reward (on evidence-gathering actions) ---
@@ -1604,13 +1701,17 @@ def compute_step_reward(
             )
 
     # --- Asymmetric error cost (on resolution actions) ---
-    if action_type in ("approve", "reject", "accept_dispute"):
+    # accept_dispute and refund_pre_dispute_alert are excluded because they
+    # are economic decisions (dispute cost vs recovery), not fraud classification.
+    # Their correctness is already captured in compute_refund_reward via
+    # dispute_should_accept logic.
+    if action_type in ("approve", "reject"):
         predicted_positive = (action_type == "reject")
         # "positive" meaning "flagged as problematic"
         actual_positive_map = {
-            CaseType.REFUND: float(_case_attr(case, "true_fraud_risk", 0.0)) > 0.5,
-            CaseType.INVOICE: bool(_case_attr(case, "true_is_duplicate", False)),
-            CaseType.KYC: not bool(_case_attr(case, "true_doc_valid", True)),
+            CaseType.REFUND: float(_hidden(case, "true_fraud_risk", 0.0)) > 0.5,
+            CaseType.INVOICE: bool(_hidden(case, "true_is_duplicate", False)),
+            CaseType.KYC: not bool(_hidden(case, "true_doc_valid", True)),
             CaseType.TRIAGE: case.priority <= 2,
         }
         actual_positive = actual_positive_map.get(case.case_type, False)
@@ -1628,14 +1729,14 @@ def compute_step_reward(
         )
 
     if action_type == "approve" and case.case_type == CaseType.REFUND:
-        if float(_case_attr(case, "true_fraud_risk", 0.0)) > 0.5:
+        if float(_hidden(case, "true_fraud_risk", 0.0)) > 0.5:
             result.cascade_rewards["fraud_rate"] = compute_fraud_cascade(
                 cumulative_fraud_approvals=episode_metrics.chargebacks + 1,
                 total_decisions=episode_metrics.cases_resolved + 1,
             )
 
     if action_type == "approve" and case.case_type == CaseType.KYC:
-        if not bool(_case_attr(case, "kyc_complete", False)):
+        if not bool(_wf(case, "kyc_complete", False)):
             result.cascade_rewards["compliance"] = compute_compliance_cascade(
                 compliance_failures=episode_metrics.compliance_violations + 1,
                 remaining_kyc_cases=sum(
@@ -1645,7 +1746,7 @@ def compute_step_reward(
             )
 
     if action_type == "approve" and case.case_type == CaseType.INVOICE:
-        if bool(_case_attr(case, "true_is_duplicate", False)):
+        if bool(_hidden(case, "true_is_duplicate", False)):
             result.cascade_rewards["cashflow"] = compute_cashflow_cascade(
                 duplicate_amount_approved=case.amount,
             )
@@ -1653,16 +1754,38 @@ def compute_step_reward(
     if action_type == "approve_qa":
         result.cascade_rewards["qa"] = compute_qa_cascade(
             qa_passed=True,
-            qa_required=bool(_case_attr(case, "qa_required", False)),
+            qa_required=bool(_wf(case, "qa_required", False)),
             rework_count=len(getattr(case, "qa_history", [])),
         )
 
     if action_type == "fail_qa":
         result.cascade_rewards["qa"] = compute_qa_cascade(
             qa_passed=False,
-            qa_required=bool(_case_attr(case, "qa_required", False)),
+            qa_required=bool(_wf(case, "qa_required", False)),
             rework_count=len(getattr(case, "qa_history", [])),
         )
+
+    if action_type in {
+        "run_sanctions_screen",
+        "start_edd_review",
+        "review_beneficial_owner",
+        "request_field_correction",
+        "file_ofac_report",
+        "freeze_payments",
+    }:
+        result.cascade_rewards["kyc_compliance"] = compute_kyc_compliance_cascade(case, action_type)
+
+    if action_type in {
+        "challenge_dispute",
+        "refund_pre_dispute_alert",
+        "resolve_prearbitration",
+        "freeze_payouts",
+        "unfreeze_payouts",
+        "set_reserve_percent",
+        "clear_reserve",
+        "set_payout_delay_days",
+    }:
+        result.cascade_rewards["refund_risk"] = compute_refund_risk_cascade(case, action_type)
 
     result.compute_totals()
     return result
@@ -1678,7 +1801,7 @@ def compute_step_reward(
 # We define Phi as a function of observable progress indicators.
 # Phi is NOT a reward -- it is a potential function whose CHANGE is the reward.
 
-def phi_refund(case: CaseState) -> float:
+def phi_refund(case: CaseProto) -> float:
     """Potential function for refund workflow progress."""
     phi = 0.0
     # Evidence gathering progress
@@ -1693,12 +1816,12 @@ def phi_refund(case: CaseState) -> float:
     # Customer notified (prerequisite for closing)
     if case.customer_notified:
         phi += 0.20
-    if _workflow_value(case, "dispute_stage") in {"evidence_submitted", "won", "finalized"}:
+    if _wf(case, "dispute_stage") in {"evidence_submitted", "won", "finalized"}:
         phi += 0.10
     return phi
 
 
-def phi_invoice(case: CaseState) -> float:
+def phi_invoice(case: CaseProto) -> float:
     """Potential function for invoice reconciliation progress."""
     phi = 0.0
     # Three-way match progress (PO, invoice, receipt)
@@ -1713,14 +1836,14 @@ def phi_invoice(case: CaseState) -> float:
     # Communication (vendor contacted if needed)
     if case.notifications_required > 0:
         phi += 0.15 * (case.notifications_sent / case.notifications_required)
-    if _workflow_value(case, "credit_memo_status") in {"requested", "received", "applied"}:
+    if _wf(case, "credit_memo_status") in {"requested", "received", "applied"}:
         phi += 0.10
-    if _workflow_value(case, "approval_status") in {"pending_secondary", "approved"}:
+    if _wf(case, "approval_status") in {"pending_secondary", "approved"}:
         phi += 0.05
     return phi
 
 
-def phi_kyc(case: CaseState) -> float:
+def phi_kyc(case: CaseProto) -> float:
     """Potential function for KYC compliance progress."""
     phi = 0.0
     # KYC document completeness
@@ -1738,7 +1861,7 @@ def phi_kyc(case: CaseState) -> float:
     return phi
 
 
-def phi_triage(queue: QueueState) -> float:
+def phi_triage(queue: QueueProto) -> float:
     """
     Potential function for queue triage progress.
 
@@ -1773,8 +1896,8 @@ def phi_triage(queue: QueueState) -> float:
 
 
 def compute_queue_shaping_reward(
-    queue: QueueState,
-    prev_queue: QueueState | None = None,
+    queue: QueueProto,
+    prev_queue: QueueProto | None = None,
     gamma: float = 0.99,
     shaping_lambda: float = 0.5,
 ) -> float:
@@ -1784,10 +1907,10 @@ def compute_queue_shaping_reward(
 
 
 def compute_shaping_reward(
-    case: CaseState,
-    queue: QueueState,
-    prev_case: CaseState | None = None,
-    prev_queue: QueueState | None = None,
+    case: CaseProto,
+    queue: QueueProto,
+    prev_case: CaseProto | None = None,
+    prev_queue: QueueProto | None = None,
     gamma: float = 0.99,
     shaping_lambda: float = 0.5,
 ) -> float:

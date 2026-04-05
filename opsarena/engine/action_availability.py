@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 from opsarena.domain.core import QAStatus
-from opsarena.domain.workflows.invoice import CreditMemoStatus, InvoiceWorkflowState
-from opsarena.domain.workflows.refund import DisputeStage, RefundWorkflowState
+from opsarena.domain.workflows.invoice import (
+    CreditMemoStatus,
+    InvoiceWorkflowState,
+    POChangeStatus,
+    PaymentBatchStatus,
+    VendorResponseStatus,
+)
+from opsarena.domain.workflows.kyc import BeneficialOwnerStatus, EDDStatus, OFACReportStatus, SanctionsStatus
+from opsarena.domain.workflows.refund import DisputeStage, PreDisputeType, RefundWorkflowState
 from opsarena.engine.state import CaseState, WorldState
 
 
@@ -47,8 +54,22 @@ def available_actions_for_case(case: CaseState) -> list[str]:
     if case.qa_status != QAStatus.PENDING:
         if isinstance(case.workflow, RefundWorkflowState):
             actions.add("execute_refund")
-            if case.workflow.dispute_stage in {DisputeStage.INQUIRY, DisputeStage.CHARGEBACK_OPEN, DisputeStage.PRE_ARBITRATION}:
+            if case.workflow.pre_dispute_type != PreDisputeType.NONE and case.workflow.dispute_stage == DisputeStage.INQUIRY:
+                actions.update({"refund_pre_dispute_alert", "challenge_dispute"})
+            if case.workflow.dispute_stage in {DisputeStage.CHARGEBACK_OPEN, DisputeStage.PRE_ARBITRATION}:
                 actions.update({"accept_dispute", "submit_dispute_evidence"})
+            if case.workflow.dispute_stage == DisputeStage.CHARGEBACK_OPEN:
+                actions.add("challenge_dispute")
+            if case.workflow.dispute_stage == DisputeStage.PRE_ARBITRATION:
+                actions.add("resolve_prearbitration")
+            if case.workflow.payout_frozen:
+                actions.add("unfreeze_payouts")
+            else:
+                actions.add("freeze_payouts")
+            actions.add("set_reserve_percent")
+            actions.add("set_payout_delay_days")
+            if case.workflow.reserve_percent > 0:
+                actions.add("clear_reserve")
         elif isinstance(case.workflow, InvoiceWorkflowState):
             actions.add("record_three_way_match")
             if case.workflow.payment_hold:
@@ -59,8 +80,40 @@ def available_actions_for_case(case: CaseState) -> list[str]:
                 actions.add("request_credit_memo")
             if case.workflow.secondary_approval_required and case.workflow.approval_status.value != "pending_secondary":
                 actions.add("send_for_secondary_approval")
+            if case.workflow.vendor_response_status != VendorResponseStatus.AWAITING:
+                actions.add("request_revised_invoice")
+            if case.workflow.po_change_status == POChangeStatus.NOT_REQUESTED:
+                actions.add("request_po_change")
+            if case.workflow.payment_batch_status in {PaymentBatchStatus.SCHEDULED, PaymentBatchStatus.IN_PROGRESS}:
+                actions.add("remove_from_payment_batch")
+            if (
+                case.workflow.payment_batch_status == PaymentBatchStatus.IN_PROGRESS
+                and case.workflow.stop_payment_window_until is not None
+            ):
+                actions.add("stop_payment")
+            actions.add("record_vendor_refund")
+            if case.workflow.credit_memo_status == CreditMemoStatus.RECEIVED:
+                actions.add("apply_credit_memo")
+            remaining = abs(case.workflow.variance_amount or case.amount)
+            if remaining <= case.workflow.write_off_threshold:
+                actions.add("write_off_small_balance")
         else:
             actions.update({"review_kyc", "trigger_reverification"})
+            if case.workflow.sanctions_status != SanctionsStatus.CONFIRMED_MATCH:
+                actions.add("run_sanctions_screen")
+            if case.workflow.sanctions_status in {SanctionsStatus.POTENTIAL_MATCH, SanctionsStatus.CONFIRMED_MATCH}:
+                actions.add("freeze_payments")
+            if case.workflow.edd_status in {EDDStatus.NOT_STARTED, EDDStatus.AWAITING_RESPONSE, EDDStatus.IN_PROGRESS}:
+                actions.add("start_edd_review")
+            if case.workflow.beneficial_owner_status in {
+                BeneficialOwnerStatus.PENDING_REVIEW,
+                BeneficialOwnerStatus.NEEDS_CORRECTION,
+            }:
+                actions.add("review_beneficial_owner")
+            if case.workflow.correction_fields:
+                actions.add("request_field_correction")
+            if case.workflow.ofac_report_status in {OFACReportStatus.PENDING, OFACReportStatus.MISSED}:
+                actions.add("file_ofac_report")
 
     return sorted(actions)
 

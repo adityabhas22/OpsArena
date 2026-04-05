@@ -20,6 +20,7 @@ from opsarena.engine.handlers.common import (
     require_refund_workflow,
     require_kyc_workflow,
     sort_key,
+    sync_kyc_flags,
 )
 from opsarena.engine.handlers.result import TransitionResult
 from opsarena.engine.policies import query_policy
@@ -471,15 +472,21 @@ def handle_approve(state: WorldState, action: ApproveAction):
             raise ValueError("secondary_approval_required")
         if workflow.credit_memo_status.value == "requested":
             raise ValueError("credit_memo_pending")
+    if case.case_type == CaseType.KYC:
+        workflow = require_kyc_workflow(case)
+        if not workflow.kyc_complete:
+            raise ValueError("kyc_incomplete")
+        if not workflow.approval_ready():
+            raise ValueError("compliance_review_incomplete")
     _clear_qa_rework(case)
     case.resolution = Resolution.APPROVED
     case.status = "resolved"
-    if case.case_type == CaseType.KYC and not require_kyc_workflow(case).kyc_complete:
-        state.metrics.compliance_violations += 1
     if case.case_type == CaseType.REFUND and case.hidden.true_fraud_risk > 0.7:
         schedule_event(state, ChargebackEvent(at_time=state.current_time + 30, case_id=case.case_id))
     if case.case_type == CaseType.INVOICE and case.hidden.true_is_duplicate:
         state.metrics.duplicate_payments += 1
+    if case.case_type == CaseType.KYC:
+        sync_kyc_flags(case)
     return TransitionResult(True, f"Approved {case.case_id}"), case
 
 
@@ -488,6 +495,8 @@ def handle_reject(state: WorldState, action: RejectAction):
     _clear_qa_rework(case)
     case.resolution = Resolution.REJECTED
     case.status = "resolved"
+    if case.case_type == CaseType.KYC:
+        sync_kyc_flags(case)
     return TransitionResult(True, f"Rejected {case.case_id}"), case
 
 

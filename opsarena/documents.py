@@ -253,6 +253,15 @@ class VerifiedIdentity(BaseModel):
     id_number: str = ""
 
 
+class BeneficialOwner(BaseModel):
+    owner_id: str
+    full_name: str
+    ownership_percent: float
+    title: str = ""
+    address: str = ""
+    review_status: str = "unreviewed"
+
+
 class KYCVerification(BaseModel):
     session_id: str
     entity_id: str
@@ -264,6 +273,15 @@ class KYCVerification(BaseModel):
     document_front: str | None = None
     document_back: str | None = None
     error_code: str | None = None
+    legal_business_name: str = ""
+    incorporation_country: str = "US"
+    business_type: str = "marketplace"
+    beneficial_owners: list[BeneficialOwner] = Field(default_factory=list)
+    sanctions_screening_reference: str | None = None
+    sanctions_review_notes: list[str] = Field(default_factory=list)
+    edd_notes: list[str] = Field(default_factory=list)
+    correction_requests: list[str] = Field(default_factory=list)
+    ofac_case_id: str | None = None
 
 
 class PolicyCondition(BaseModel):

@@ -65,9 +65,13 @@ class OpsArenaEnvironment(Environment[RawOpsAction, OpsArenaObservation, OpsAren
     def _is_done(self) -> bool:
         assert self._state is not None
         all_closed = all(case.status == "closed" for case in self._state.cases.values())
-        no_pending_events = len(self._state.scheduled_events) == 0
+        # SLA breach events for closed cases don't block episode completion
+        meaningful_events = [
+            e for e in self._state.scheduled_events
+            if not (e.event_type == "sla_breach" and e.case_id and self._state.cases.get(e.case_id, None) and self._state.cases[e.case_id].status == "closed")
+        ]
         max_steps = self._state.metadata.get("max_steps", 40)
-        return (all_closed and no_pending_events) or self._state.step_count >= max_steps
+        return (all_closed and len(meaningful_events) == 0) or self._state.step_count >= max_steps
 
     @property
     def state(self) -> OpsArenaState:
