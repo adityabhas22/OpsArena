@@ -26,16 +26,14 @@ def _refund_tool_names() -> list[str]:
 
 def _invoke_tool(env: RefundExceptionToolEnv, tool: str, arguments: dict[str, Any]) -> str:
     fn = getattr(env, tool, None)
-    if not callable(fn):
+    if fn is None or not callable(fn) or tool.startswith("_"):
         return f"error: unknown tool {tool!r}"
     import inspect
 
     sig = inspect.signature(fn)
     params = list(sig.parameters.values())
-    if not params or params[0].name != "self":
-        return f"error: bad signature for {tool!r}"
     kwargs: dict[str, Any] = {}
-    for p in params[1:]:
+    for p in params:
         if p.name in arguments:
             kwargs[p.name] = arguments[p.name]
         elif p.default is inspect.Parameter.empty:

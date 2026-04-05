@@ -357,30 +357,52 @@ def refund_terminal_benchmark_reward(
     log_metric: Any | None = None,
     **_: Any,
 ) -> list[float]:
-    """Scores refund trajectories from final environment state.
+    """Scores refund trajectories with progress shaping + terminal benchmark bonus.
 
-    The reward is intentionally terminal-heavy: incomplete episodes receive zero and
-    completed episodes are graded from the normalized benchmark score, with a small
-    penalty for repeated invalid tool calls.
+    Purely terminal reward (0 unless done) creates a dead gradient when the base
+    model cannot complete any episodes.  Instead we give small, bounded shaping
+    credit for *valid* tool calls and intermediate benchmark progress, so GRPO
+    always has contrast between better and worse rollouts.  Completed episodes
+    receive a large bonus from the final benchmark score.
+
+    Reward budget:
+      - progress shaping:  0.0 – 0.3  (valid tool calls + intermediate score)
+      - terminal bonus:    0.0 – 0.7  (benchmark_score scaled)
+      - invalid penalty:   up to -0.10
+      Total range:         0.0 – 1.0
     """
 
     rewards: list[float] = []
     done_count = 0
+    total_tool_calls = 0
     invalid_count = 0
     for env in environments:
         done = env.done
         done_count += int(done)
         invalid_count += env.invalid_action_count
-        if not done:
-            rewards.append(0.0)
-            continue
-        reward = env.benchmark_score - min(env.invalid_action_count, 5) * 0.02
+        valid_tools = max(env.tool_call_count - env.invalid_action_count, 0)
+        total_tool_calls += env.tool_call_count
+
+        # Shaping: reward valid tool calls (diminishing returns, caps at 0.15)
+        tool_shaping = min(valid_tools * 0.02, 0.15)
+
+        # Shaping: intermediate benchmark score progress even if not done
+        progress_shaping = min(env.benchmark_score * 0.15, 0.15)
+
+        # Terminal bonus for completing the episode
+        terminal = env.benchmark_score * 0.7 if done else 0.0
+
+        # Penalty for invalid actions
+        invalid_penalty = min(env.invalid_action_count, 5) * 0.02
+
+        reward = tool_shaping + progress_shaping + terminal - invalid_penalty
         rewards.append(max(0.0, min(1.0, reward)))
 
     if log_metric is not None and environments:
         count = len(environments)
         log_metric("env/refund_done_rate", done_count / count)
         log_metric("env/refund_invalid_actions_mean", invalid_count / count)
+        log_metric("env/refund_tool_calls_mean", total_tool_calls / count)
         log_metric("env/refund_terminal_score_mean", sum(rewards) / count)
 
     return rewards
@@ -422,6 +444,18 @@ class RefundExceptionToolEnv:
         if self._env._state is None:
             return 0.0
         return float(self._env._state.metadata.get("legacy_objective_score", 0.0))
+
+    @property
+    def tool_call_count(self) -> int:
+        if self._env._state is None:
+            return 0
+        return self._env._state.metrics.tool_calls
+
+    @property
+    def cases_resolved(self) -> int:
+        if self._env._state is None:
+            return 0
+        return self._env._state.metrics.cases_resolved
 
     def reset(self, **_: Any) -> str:
         """Reset the refund episode and return the initial text observation.

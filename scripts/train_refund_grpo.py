@@ -6,7 +6,6 @@ from dataclasses import fields
 from functools import partial
 
 from opsarena.training import (
-    REFUND_TOOLS,
     RefundExceptionToolEnv,
     build_refund_grpo_prompt_dataset,
     refund_terminal_benchmark_reward,
@@ -36,6 +35,10 @@ def _build_grpo_config(args: argparse.Namespace, GRPOConfig: type) -> object:
         "log_completions": True,
         "logging_steps": 1,
         "save_steps": 50,
+        # Qwen3 defaults to <think> mode which burns the entire token budget on
+        # chain-of-thought before emitting a tool call.  Disable it so the model
+        # spends its tokens on actual tool-calling turns.
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     if args.use_vllm:
         candidate["vllm_max_model_length"] = args.max_prompt_length + args.max_completion_length + 256
@@ -72,7 +75,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--per-device-train-batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
     parser.add_argument("--max-prompt-length", type=int, default=2048)
-    parser.add_argument("--max-completion-length", type=int, default=768)
+    parser.add_argument("--max-completion-length", type=int, default=2048)
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--lora-r", type=int, default=32)
     parser.add_argument("--lora-alpha", type=int, default=64)
@@ -110,26 +113,20 @@ def main() -> None:
 
     processing_class = prepare_tokenizer_for_grpo(args.model)
 
-    import inspect
-    trainer_kwargs: dict = {
-        "model": args.model,
-        "processing_class": processing_class,
-        "reward_funcs": refund_terminal_benchmark_reward,
-        "train_dataset": train_dataset,
-        "peft_config": LoraConfig(
+    trainer = GRPOTrainer(
+        model=args.model,
+        processing_class=processing_class,
+        reward_funcs=refund_terminal_benchmark_reward,
+        train_dataset=train_dataset,
+        peft_config=LoraConfig(
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
             target_modules="all-linear",
             task_type="CAUSAL_LM",
         ),
-        "args": config,
-        "environment_factory": partial(RefundExceptionToolEnv, random_seed=args.seed),
-    }
-    # Pass tool schemas if GRPOTrainer supports them (TRL ≥ post-1.0 adds tools= for
-    # environment_factory training so the tokenizer embeds tool definitions in the prompt).
-    if "tools" in inspect.signature(GRPOTrainer.__init__).parameters:
-        trainer_kwargs["tools"] = REFUND_TOOLS
-    trainer = GRPOTrainer(**trainer_kwargs)
+        args=config,
+        environment_factory=partial(RefundExceptionToolEnv, random_seed=args.seed),
+    )
     trainer.train()
     trainer.save_model(args.output_dir)
 
