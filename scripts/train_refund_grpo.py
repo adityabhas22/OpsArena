@@ -9,6 +9,7 @@ from opsarena.training import (
     build_refund_grpo_prompt_dataset,
     refund_terminal_benchmark_reward,
 )
+from opsarena.training.cuda_lib_path import prepend_nvidia_cuda_runtime_lib_path
 from opsarena.training.trl_tokenizer import prepare_tokenizer_for_grpo
 
 
@@ -60,13 +61,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--use-vllm",
         action="store_true",
-        help="Enable vLLM generation. Prefer colocate mode first; avoid server mode for multi-step runs.",
+        help=(
+            "Enable vLLM generation (requires vLLM: pip install -e '.[train-vllm]'). "
+            "If import fails with libcudart.so, run without this flag or uninstall vLLM. "
+            "In zsh, quote extras. Prefer colocate mode; avoid server mode for multi-step runs."
+        ),
     )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    # So vLLM / TRL can find libcudart.so.* from PyTorch's nvidia-cuda-runtime wheels
+    prepend_nvidia_cuda_runtime_lib_path()
     try:
         from datasets import Dataset
         from peft import LoraConfig

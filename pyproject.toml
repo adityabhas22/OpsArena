@@ -25,6 +25,10 @@ train = [
   "peft>=0.17",
   "trl>=0.23.1",
 ]
+# vLLM for GRPOTrainer --use-vllm (heavy; install when needed). zsh: quote extras, e.g. pip install -e '.[train-vllm]'
+train-vllm = [
+  "vllm>=0.8",
+]
 
 [project.scripts]
 server = "server.app:main"
