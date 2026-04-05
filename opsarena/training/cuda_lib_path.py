@@ -1,17 +1,17 @@
-"""Ensure CUDA runtime library (libcudart.so.12) is loadable before vLLM import.
+"""Ensure CUDA and PyTorch shared libraries are loadable before vLLM import.
 
-vLLM loads ``libcudart.so.12`` at import time via its C extension.  On machines where
-CUDA is system-installed (e.g. DGX Spark) or pip-installed (PyTorch nvidia-cuda-runtime
-wheels), the library directory may not be on ``LD_LIBRARY_PATH``.
+vLLM's ``_C`` extension links against both ``libcudart.so.12`` (CUDA runtime) and
+``libtorch_cuda.so`` (PyTorch CUDA).  On systems where CUDA is installed in a
+non-standard prefix (e.g. DGX Spark with CUDA 13 system-wide and only Ollama's
+bundled CUDA 12 libs available), neither library is on ``LD_LIBRARY_PATH`` by default.
 
-Search order:
-1. PyTorch's bundled lib directory (fastest for pip-wheel torch installations).
-2. ``nvidia.cuda_runtime`` pip package (also ships ``libcudart.so.12``).
-3. Common system CUDA installation prefixes (``/usr/local/cuda*``).
-4. Debian/RHEL system lib dirs.
+We unconditionally prepend:
+1. PyTorch's own ``lib/`` directory  — provides ``libtorch_cuda.so`` and often
+   ``libcudart.so`` too (pip-wheel installs).
+2. The first system directory that contains ``libcudart.so*``  — Ollama's bundled
+   CUDA 12 path, standard CUDA toolkit prefixes, or distro lib dirs.
 
-We prepend the *first* matching directory to ``LD_LIBRARY_PATH`` so that vLLM's
-``dlopen()`` can find the library during the subsequent ``import vllm``.
+Both must be on ``LD_LIBRARY_PATH`` before ``import vllm`` runs.
 """
 
 from __future__ import annotations
@@ -19,9 +19,9 @@ from __future__ import annotations
 import os
 
 
-# System CUDA prefixes to probe, ordered from most specific to least.
-_SYSTEM_CUDA_LIB64_DIRS = [
-    # Ollama bundles CUDA 12 runtime on DGX Spark / Jetson (CUDA 13 system install)
+# System directories to probe for libcudart.so*, in priority order.
+_CUDART_SEARCH_DIRS = [
+    # Ollama bundles CUDA 12 runtime on DGX Spark (system CUDA is 13)
     "/usr/local/lib/ollama/cuda_v12",
     # Standard CUDA toolkit installations
     "/usr/local/cuda/lib64",
@@ -37,16 +37,15 @@ _SYSTEM_CUDA_LIB64_DIRS = [
     # ARM64 (sbsa-linux) CUDA toolkit paths
     "/usr/local/cuda-12/targets/sbsa-linux/lib",
     "/usr/local/cuda-12.8/targets/sbsa-linux/lib",
-    # RHEL-style paths
+    # RHEL-style
     "/usr/lib64",
-    # Debian/Ubuntu paths
+    # Debian/Ubuntu
     "/usr/lib/x86_64-linux-gnu",
     "/usr/lib/aarch64-linux-gnu",
 ]
 
 
 def _has_libcudart(lib_dir: str) -> bool:
-    """Return True if lib_dir exists and contains any libcudart.so* file."""
     try:
         return any(f.startswith("libcudart") for f in os.listdir(lib_dir))
     except (FileNotFoundError, PermissionError):
@@ -61,34 +60,35 @@ def _prepend(lib_dir: str) -> None:
 
 
 def prepend_nvidia_cuda_runtime_lib_path() -> None:
-    """Find libcudart.so.* and prepend its directory to ``LD_LIBRARY_PATH``.
+    """Prepend PyTorch lib/ and a libcudart directory to ``LD_LIBRARY_PATH``.
 
-    Runs before vLLM is imported so that vLLM's C extension can dlopen the
-    library.  Safe to call multiple times (idempotent).
+    Must be called before ``import vllm`` (or ``from trl import GRPOTrainer``
+    when ``use_vllm=True``).  Safe to call multiple times.
     """
 
-    candidates: list[str] = []
-
-    # 1. PyTorch bundles libcudart.so in its own lib/ for pip-installed wheels.
+    # Always add torch's lib/ first — vLLM's _C extension links against
+    # libtorch_cuda.so which lives there regardless of CUDA install location.
     try:
         import torch as _torch
-        candidates.append(os.path.join(os.path.dirname(_torch.__file__), "lib"))
+        torch_lib = os.path.join(os.path.dirname(_torch.__file__), "lib")
+        if os.path.isdir(torch_lib):
+            _prepend(torch_lib)
     except ImportError:
         pass
 
-    # 2. nvidia-cuda-runtime-cu12 pip package (installed alongside torch cu12 wheels).
+    # Add nvidia pip package lib/ if present (pip-wheel torch installs).
     try:
         import nvidia.cuda_runtime as _ncr  # type: ignore[import]
         ncr_file = getattr(_ncr, "__file__", None)
         if ncr_file:
-            candidates.append(os.path.join(os.path.dirname(ncr_file), "lib"))
+            ncr_lib = os.path.join(os.path.dirname(ncr_file), "lib")
+            if os.path.isdir(ncr_lib):
+                _prepend(ncr_lib)
     except ImportError:
         pass
 
-    # 3. System CUDA installation (DGX Spark, bare-metal servers, conda envs).
-    candidates.extend(_SYSTEM_CUDA_LIB64_DIRS)
-
-    for lib_dir in candidates:
+    # Find a directory that actually contains libcudart.so* and add it.
+    for lib_dir in _CUDART_SEARCH_DIRS:
         if _has_libcudart(lib_dir):
             _prepend(lib_dir)
             return
