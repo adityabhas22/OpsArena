@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import fields
 from functools import partial
 
 from opsarena.training import (
@@ -8,6 +9,36 @@ from opsarena.training import (
     build_refund_grpo_prompt_dataset,
     refund_terminal_benchmark_reward,
 )
+
+
+def _build_grpo_config(args: argparse.Namespace, GRPOConfig: type) -> object:
+    """Instantiate GRPOConfig with only kwargs supported by the installed TRL version.
+
+    TRL 1.x removed ``max_prompt_length`` from ``GRPOConfig``; use ``max_completion_length`` and,
+    when vLLM is enabled, ``vllm_max_model_length`` (prompt + completion headroom).
+    """
+
+    candidate: dict = {
+        "output_dir": args.output_dir,
+        "learning_rate": args.learning_rate,
+        "max_steps": args.max_steps,
+        "num_generations": args.num_generations,
+        "per_device_train_batch_size": args.per_device_train_batch_size,
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "seed": args.seed,
+        "report_to": [],
+        "max_completion_length": args.max_completion_length,
+        "use_vllm": args.use_vllm,
+        "log_completions": True,
+        "logging_steps": 1,
+        "save_steps": 50,
+    }
+    if args.use_vllm:
+        candidate["vllm_max_model_length"] = args.max_prompt_length + args.max_completion_length + 256
+
+    valid = {f.name for f in fields(GRPOConfig)}
+    filtered = {k: v for k, v in candidate.items() if k in valid}
+    return GRPOConfig(**filtered)
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,6 +78,8 @@ def main() -> None:
 
     train_dataset = Dataset.from_list(build_refund_grpo_prompt_dataset(args.num_examples))
 
+    config = _build_grpo_config(args, GRPOConfig)
+
     trainer = GRPOTrainer(
         model=args.model,
         reward_funcs=refund_terminal_benchmark_reward,
@@ -57,22 +90,7 @@ def main() -> None:
             target_modules="all-linear",
             task_type="CAUSAL_LM",
         ),
-        args=GRPOConfig(
-            output_dir=args.output_dir,
-            learning_rate=args.learning_rate,
-            max_steps=args.max_steps,
-            num_generations=args.num_generations,
-            per_device_train_batch_size=args.per_device_train_batch_size,
-            gradient_accumulation_steps=args.gradient_accumulation_steps,
-            max_prompt_length=args.max_prompt_length,
-            max_completion_length=args.max_completion_length,
-            seed=args.seed,
-            use_vllm=args.use_vllm,
-            log_completions=True,
-            logging_steps=1,
-            save_steps=50,
-            report_to=[],
-        ),
+        args=config,
         environment_factory=partial(RefundExceptionToolEnv, random_seed=args.seed),
     )
     trainer.train()
