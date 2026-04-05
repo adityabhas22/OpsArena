@@ -21,6 +21,9 @@ import os
 
 # System CUDA prefixes to probe, ordered from most specific to least.
 _SYSTEM_CUDA_LIB64_DIRS = [
+    # Ollama bundles CUDA 12 runtime on DGX Spark / Jetson (CUDA 13 system install)
+    "/usr/local/lib/ollama/cuda_v12",
+    # Standard CUDA toolkit installations
     "/usr/local/cuda/lib64",
     "/usr/local/cuda-12/lib64",
     "/usr/local/cuda-12.8/lib64",
@@ -31,6 +34,9 @@ _SYSTEM_CUDA_LIB64_DIRS = [
     "/usr/local/cuda-12.2/lib64",
     "/usr/local/cuda-12.1/lib64",
     "/usr/local/cuda-12.0/lib64",
+    # ARM64 (sbsa-linux) CUDA toolkit paths
+    "/usr/local/cuda-12/targets/sbsa-linux/lib",
+    "/usr/local/cuda-12.8/targets/sbsa-linux/lib",
     # RHEL-style paths
     "/usr/lib64",
     # Debian/Ubuntu paths
