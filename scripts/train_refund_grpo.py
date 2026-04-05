@@ -6,7 +6,7 @@ from dataclasses import fields
 from functools import partial
 
 from opsarena.training import (
-    REFUND_TOOL_SCHEMAS,
+    REFUND_TOOLS,
     RefundExceptionToolEnv,
     build_refund_grpo_prompt_dataset,
     refund_terminal_benchmark_reward,
@@ -128,7 +128,7 @@ def main() -> None:
     # Pass tool schemas if GRPOTrainer supports them (TRL ≥ post-1.0 adds tools= for
     # environment_factory training so the tokenizer embeds tool definitions in the prompt).
     if "tools" in inspect.signature(GRPOTrainer.__init__).parameters:
-        trainer_kwargs["tools"] = REFUND_TOOL_SCHEMAS
+        trainer_kwargs["tools"] = REFUND_TOOLS
     trainer = GRPOTrainer(**trainer_kwargs)
     trainer.train()
     trainer.save_model(args.output_dir)

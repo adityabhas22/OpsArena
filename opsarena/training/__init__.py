@@ -1,6 +1,7 @@
 from .refund_grpo_env import (
     REFUND_GRPO_SYSTEM_PROMPT,
     REFUND_TOOL_SCHEMAS,
+    REFUND_TOOLS,
     RefundExceptionToolEnv,
     build_refund_grpo_prompt_dataset,
     refund_terminal_benchmark_reward,
@@ -9,6 +10,7 @@ from .refund_grpo_env import (
 __all__ = [
     "REFUND_GRPO_SYSTEM_PROMPT",
     "REFUND_TOOL_SCHEMAS",
+    "REFUND_TOOLS",
     "RefundExceptionToolEnv",
     "build_refund_grpo_prompt_dataset",
     "refund_terminal_benchmark_reward",

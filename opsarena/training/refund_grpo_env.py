@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import inspect
 import random
+import types
 from collections.abc import Iterable
 from typing import Any, Literal
 
@@ -23,6 +25,48 @@ REFUND_GRPO_SYSTEM_PROMPT = (
     "case when the workflow is actually resolved."
 )
 
+# ---------------------------------------------------------------------------
+# REFUND_TOOLS — callable stubs used by TRL's GRPOTrainer(tools=...).
+#
+# TRL reads tool.__name__ and inspect.signature(tool) to auto-generate JSON
+# schemas for the tokenizer (so the model sees tool definitions in its
+# context).  We derive these stubs directly from RefundExceptionToolEnv's
+# method signatures so they stay in sync automatically.
+#
+# The actual execution happens via environment.method_name(**args); the stubs
+# are schema-only and never called directly.
+# ---------------------------------------------------------------------------
+
+_TOOL_METHOD_NAMES = [
+    "list_queue", "open_case", "view_record", "query_policy",
+    "approve", "reject", "escalate", "accept_dispute",
+    "challenge_dispute", "submit_dispute_evidence",
+    "refund_pre_dispute_alert", "resolve_prearbitration",
+    "send_message", "send_to_qa", "approve_qa",
+    "close_case", "advance_clock",
+]
+
+
+def _make_tool_stub(method_name: str) -> types.FunctionType:
+    """Return a callable with the env method's name, docstring, and signature (sans self)."""
+    method = getattr(RefundExceptionToolEnv, method_name)
+    sig = inspect.signature(method)
+    params_without_self = [p for n, p in sig.parameters.items() if n != "self"]
+    new_sig = sig.replace(parameters=params_without_self, return_annotation=str)
+
+    def stub(**kwargs: Any) -> str: ...  # noqa: E704
+
+    stub.__name__ = method_name
+    stub.__qualname__ = method_name
+    stub.__doc__ = method.__doc__ or method_name
+    stub.__signature__ = new_sig  # type: ignore[attr-defined]
+    return stub  # type: ignore[return-value]
+
+
+# Populated after RefundExceptionToolEnv is defined below.
+REFUND_TOOLS: list[types.FunctionType] = []
+
+# Keep the dict schemas around for reference / non-TRL uses.
 REFUND_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -933,3 +977,7 @@ class RefundExceptionToolEnv:
         if obs.record_view:
             lines.append(f"record_view: {obs.record_view}")
         return "\n".join(lines)
+
+
+# Populate REFUND_TOOLS now that RefundExceptionToolEnv is fully defined.
+REFUND_TOOLS.extend(_make_tool_stub(name) for name in _TOOL_METHOD_NAMES)
