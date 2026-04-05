@@ -1,44 +1,55 @@
 # OpsArena Production Roadmap
 
-This roadmap focuses on workflows that would make OpsArena more useful for real ecommerce operations, risk, and finance teams.
+This roadmap covers the workflows that make OpsArena useful for real ecommerce operations, risk, and finance teams.
 
-## What we already have
+## What is implemented
 
-Today the environment can train agents on:
+OpsArena currently supports training agents on:
 
-- refund and dispute handling
-- invoice exception handling
-- KYC remediation
-- shared-queue basics like claim, route, prioritize, and follow-up
+- refund and dispute handling (Phase 1)
+- invoice exception handling (Phase 1)
+- KYC remediation (Phase 1)
+- shared-queue basics like claim, route, prioritize, and follow-up (Phase 1)
+- supervisor and QA loops including bulk assignment, queue rebalancing, and quality review (Phase 2)
+- queue shock events: arrival waves and staffing drops (Phase 2)
+- full dispute lifecycle including pre-dispute alerts, representment, and pre-arbitration (Phase 3)
+- payout risk controls: freeze, reserve, delay (Phase 3)
+- merchant risk monitoring: dispute ratio, fraud ratio, monitoring program status (Phase 3)
+- compliance investigations: sanctions screening, EDD, beneficial owner review (Phase 4)
+- regulatory reporting: OFAC reports with deadlines (Phase 4)
+- payment freezing for compliance holds (Phase 4)
+- AP payment-run recovery: revised invoices, PO changes, stop payments, vendor refunds, credit memo application, write-offs (Phase 5)
 
-That is enough to study analyst behavior.
+## Phase 1: core workflows (IMPLEMENTED)
 
-## What is still most valuable to add
+### Goal
+Establish the foundational case-handling workflows.
 
-The next big step is modeling how a real operations organization behaves under pressure:
+### What it covers
 
-- managers and supervisors
-- quality review and reopens
-- richer dispute stages
-- payout / reserve controls
-- compliance investigations
-- payment-run and recovery workflows
+- Refund and dispute case resolution
+- Invoice exception handling with three-way match
+- KYC remediation with document review
+- Queue management: claim, route, prioritize, follow-up, SLA tracking
+- Core actions: approve, reject, escalate, defer, close, reopen
+- Information gathering: list queue, open case, view record, query policy, search cases, inspect audit
+- Communication: request info, send message, log internal note
 
-## Phase 2: supervisor and QA loops
+## Phase 2: supervisor and QA loops (IMPLEMENTED)
 
 ### Goal
 Make the environment useful for training agents that do more than solve one case at a time.
 
-### Add these actions
+### Actions added
 
-- `bulk_assign`
-- `bulk_route`
-- `rebalance_queue`
-- `send_to_qa`
-- `fail_qa`
-- `approve_qa`
+- `bulk_assign` -- assign up to 10 cases to an agent at once
+- `bulk_route` -- route up to 10 cases to a target queue at once
+- `rebalance_queue` -- redistribute unassigned cases across an agent pool
+- `send_to_qa` -- submit a case for quality review
+- `fail_qa` -- fail a QA-reviewed case and send back for rework
+- `approve_qa` -- pass a QA-reviewed case
 
-### Add these state fields
+### State fields added
 
 - `qa_status`
 - `qa_owner`
@@ -47,13 +58,13 @@ Make the environment useful for training agents that do more than solve one case
 - `exception_queue_size`
 - `agent_capacity`
 
-### Add these delayed events
+### Delayed events added
 
-- `qa_sample_selected`
-- `qa_failed`
-- `rework_due`
-- `arrival_wave`
-- `staffing_drop`
+- `qa_sample_selected` -- a resolved case is sampled for QA review
+- `qa_failed` -- a QA review finds defects
+- `rework_due` -- a failed QA case must be reworked
+- `arrival_wave` -- a spike in incoming case volume
+- `staffing_drop` -- a reduction in available agent capacity
 
 ### Why it matters in production
 
@@ -67,123 +78,123 @@ Real teams care about:
 
 This phase makes the environment useful for supervisor-style decision making, not just analyst-style decision making.
 
-## Phase 3: richer dispute and payout-risk workflows
+## Phase 3: dispute lifecycle and payout-risk workflows (IMPLEMENTED)
 
 ### Goal
-Model the real payments risk lifecycle instead of a simplified “approve vs reject vs defend” flow.
+Model the real payments risk lifecycle instead of a simplified "approve vs reject vs defend" flow.
 
-### Add these actions
+### Actions added
 
-- `challenge_dispute`
-- `refund_pre_dispute_alert`
-- `resolve_prearbitration`
-- `freeze_payouts`
-- `unfreeze_payouts`
-- `set_reserve_percent`
-- `clear_reserve`
-- `set_payout_delay_days`
+- `challenge_dispute` -- challenge a dispute via representment
+- `refund_pre_dispute_alert` -- refund proactively on a pre-dispute alert
+- `resolve_prearbitration` -- respond to a pre-arbitration notice (accept or contest)
+- `freeze_payouts` -- freeze merchant payouts
+- `unfreeze_payouts` -- unfreeze merchant payouts
+- `set_reserve_percent` -- set a rolling reserve on payouts
+- `clear_reserve` -- clear a previously set reserve
+- `set_payout_delay_days` -- set a payout delay in days
 
-### Add these state fields
+### State fields added
 
-- `dispute_stage`
-- `reserve_percent`
-- `payout_delay_days`
-- `merchant_risk_level`
-- `dispute_ratio`
-- `monitoring_program_status`
+- `dispute_stage` -- tracks the dispute through inquiry, chargeback, evidence submitted, pre-arbitration, won, lost, finalized
+- `reserve_percent` -- current rolling reserve percentage
+- `payout_delay_days` -- current payout delay
+- `merchant_risk_level` -- normal, elevated, high, critical
+- `dispute_ratio` -- 30-day merchant dispute ratio
+- `monitoring_program_status` -- normal, warning, breached
 
-### Add these delayed events
+### Delayed events added
 
-- `inquiry_escalates_to_chargeback`
-- `prearbitration_received`
-- `reserve_release_due`
-- `monitoring_threshold_breached`
+- `inquiry_escalates_to_chargeback` -- a pre-dispute inquiry becomes a formal chargeback
+- `prearbitration_received` -- a pre-arbitration notice arrives after representment
+- `reserve_release_due` -- a reserve auto-release timer expires
+- `monitoring_threshold_breached` -- merchant risk metrics cross a threshold
 
 ### Why it matters in production
 
-This would make OpsArena useful for:
+This makes OpsArena useful for:
 
 - merchant risk operations
 - payment operations
 - platform trust and safety
 
-It also makes the reward signal more realistic because the agent must trade off:
+The agent must trade off:
 
 - immediate customer or merchant pain
-- financial loss
-- downstream network risk
+- financial loss (dispute fees, chargeback costs)
+- downstream network risk (monitoring programs, processor fees)
 
-## Phase 4: deeper compliance workflows
+## Phase 4: compliance investigation workflows (IMPLEMENTED)
 
 ### Goal
 Move beyond document-only KYC into real marketplace compliance operations.
 
-### Add these actions
+### Actions added
 
-- `run_sanctions_screen`
-- `start_edd_review`
-- `review_beneficial_owner`
-- `request_field_correction`
-- `file_ofac_report`
-- `freeze_payments`
+- `run_sanctions_screen` -- run sanctions and watchlist screening
+- `start_edd_review` -- initiate Enhanced Due Diligence review
+- `review_beneficial_owner` -- review beneficial ownership information
+- `request_field_correction` -- ask the applicant to correct a specific field
+- `file_ofac_report` -- file a required OFAC or regulatory report
+- `freeze_payments` -- freeze all payments for compliance reasons
 
-### Add these state fields
+### State fields added
 
-- `sanctions_status`
-- `edd_status`
-- `beneficial_owner_status`
-- `screening_match_confidence`
-- `report_due_at`
+- `sanctions_status` -- not_started, clear, potential_match, confirmed_match
+- `edd_status` -- not_started, not_required, in_progress, awaiting_response, cleared
+- `beneficial_owner_status` -- not_started, pending_review, needs_correction, verified, rejected
+- `screening_match_confidence` -- confidence score for sanctions screening matches
+- `report_due_at` -- deadline for filing a required regulatory report
 
-### Add these delayed events
+### Delayed events added
 
-- `sanctions_false_positive_cleared`
-- `edd_response_due`
-- `report_deadline_missed`
+- `sanctions_false_positive_cleared` -- a potential sanctions match is cleared as a false positive
+- `edd_response_due` -- an EDD response deadline arrives
+- `report_deadline_missed` -- an OFAC reporting deadline passes without a filing
 
 ### Why it matters in production
 
-This would make the environment more useful to:
+This makes the environment useful to:
 
 - compliance teams
 - marketplace onboarding teams
 - trust and safety teams
 
-It also introduces strong hard-gate failures, which is good for benchmark realism.
+It introduces strong hard-gate failures: approving a sanctioned entity or missing a reporting deadline are catastrophic errors, which is important for benchmark realism.
 
-## Phase 5: AP payment-run and recovery workflows
+## Phase 5: AP payment-run and recovery workflows (IMPLEMENTED)
 
 ### Goal
 Model the finance cleanup work that happens after invoice review.
 
-### Add these actions
+### Actions added
 
-- `request_revised_invoice`
-- `request_po_change`
-- `remove_from_payment_batch`
-- `stop_payment`
-- `record_vendor_refund`
-- `apply_credit_memo`
-- `write_off_small_balance`
+- `request_revised_invoice` -- ask the vendor to resubmit a corrected invoice
+- `request_po_change` -- request a purchase order amendment
+- `remove_from_payment_batch` -- pull an invoice out of a scheduled payment batch
+- `stop_payment` -- stop a payment already in progress
+- `record_vendor_refund` -- record that a vendor returned funds
+- `apply_credit_memo` -- apply a received credit memo to an invoice
+- `write_off_small_balance` -- write off a small remaining balance
 
-### Add these state fields
+### State fields added
 
-- `payment_batch_status`
-- `vendor_response_status`
-- `recovery_status`
-- `duplicate_status`
-- `remittance_change_risk`
+- `payment_batch_status` -- not_scheduled, scheduled, in_progress, completed, stopped
+- `vendor_response_status` -- not_requested, awaiting, received, overdue
+- `recovery_status` -- not_needed, in_progress, partial, complete
+- `duplicate_status` -- suspected, confirmed, false_positive, already_paid
+- `po_change_status` -- not_requested, pending_approval, approved, denied
 
-### Add these delayed events
+### Delayed events added
 
-- `vendor_sends_revised_invoice`
-- `po_change_approved`
-- `stop_payment_confirmed`
-- `refund_received`
+- `vendor_sends_revised_invoice` -- the vendor responds with a corrected invoice
+- `po_change_approved` -- a PO change request is approved
+- `stop_payment_confirmed` -- a stop payment request is confirmed
+- `refund_received` -- a vendor refund arrives
 
 ### Why it matters in production
 
-This would make OpsArena useful for:
+This makes OpsArena useful for:
 
 - AP operations teams
 - procurement-finance handoff workflows
@@ -206,12 +217,15 @@ If someone wanted to use OpsArena as a serious benchmark or internal simulator, 
 - credit memo recovery
 - approval chains
 - payment-run blocking and release
+- post-payment recovery (stop payments, vendor refunds, write-offs)
 
 ### 3. Compliance operations
 
 - KYC remediation
 - sanctions review
 - EDD investigation
+- beneficial owner verification
+- OFAC reporting
 - payout restrictions
 
 ### 4. Queue leadership and team operations
@@ -221,11 +235,12 @@ If someone wanted to use OpsArena as a serious benchmark or internal simulator, 
 - QA sampling
 - staffing shock handling
 
-## Recommended implementation order
+## Implementation order
 
-1. Phase 2: supervisor + QA
-2. Phase 3: dispute lifecycle + payout reserves
-3. Phase 4: sanctions + EDD
-4. Phase 5: AP payment-run recovery
+Phases were implemented in this order:
 
-This order gives the biggest realism gain while keeping the environment explainable and maintainable.
+1. Phase 1: core workflows (refund, invoice, KYC, queue management)
+2. Phase 2: supervisor + QA loops + queue shock events
+3. Phase 3: dispute lifecycle + payout reserves + merchant risk monitoring
+4. Phase 4: sanctions screening + EDD + beneficial owner review + OFAC reporting
+5. Phase 5: AP payment-run recovery (revised invoices, PO changes, stop payments, vendor refunds, credit memos, write-offs)
