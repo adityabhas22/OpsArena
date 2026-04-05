@@ -23,6 +23,267 @@ REFUND_GRPO_SYSTEM_PROMPT = (
     "case when the workflow is actually resolved."
 )
 
+REFUND_TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_queue",
+            "description": "List active refund cases in the queue.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "default": 10},
+                    "sort_by": {"type": "string", "enum": ["priority", "sla_remaining", "created_at", "amount"], "default": "priority"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_case",
+            "description": "Open a refund case and view its details.",
+            "parameters": {
+                "type": "object",
+                "properties": {"case_id": {"type": "string"}},
+                "required": ["case_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "view_record",
+            "description": "Inspect a linked record for the active case (order, customer, payment, shipping, dispute, policy).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "record_type": {"type": "string", "enum": ["order", "customer", "payment", "shipping", "dispute", "policy"]},
+                    "record_id": {"type": "string"},
+                },
+                "required": ["record_type", "record_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_policy",
+            "description": "Query refund policy text to determine the correct action.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "policy_id": {"type": "string", "default": "refund_policy"},
+                    "clause_id": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "approve",
+            "description": "Approve a refund case.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_id": {"type": "string"},
+                    "decision_code": {"type": "string", "enum": ["standard_approval", "exception_approval", "partial_approval"], "default": "standard_approval"},
+                    "approved_amount": {"type": "number"},
+                    "notes": {"type": "string"},
+                },
+                "required": ["case_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reject",
+            "description": "Reject a refund case.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_id": {"type": "string"},
+                    "reason_code": {"type": "string", "enum": ["suspicious_pattern", "missing_documentation", "policy_ambiguity", "customer_request", "duplicate_match", "invalid_document"]},
+                    "notes": {"type": "string"},
+                },
+                "required": ["case_id", "reason_code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "escalate",
+            "description": "Escalate a case to manager_review, fraud_team, or senior_ops.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_id": {"type": "string"},
+                    "target_queue": {"type": "string", "enum": ["manager_review", "fraud_team", "senior_ops"]},
+                    "reason_code": {"type": "string", "enum": ["threshold_exceeded", "suspicious_pattern", "policy_ambiguity", "sla_protection"]},
+                    "priority_override": {"type": "integer", "enum": [1, 2, 3, 4]},
+                },
+                "required": ["case_id", "target_queue", "reason_code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "accept_dispute",
+            "description": "Accept liability on a chargeback dispute instead of contesting it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_id": {"type": "string"},
+                    "notes": {"type": "string"},
+                },
+                "required": ["case_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "challenge_dispute",
+            "description": "Contest a chargeback dispute after reviewing evidence.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_id": {"type": "string"},
+                    "notes": {"type": "string"},
+                },
+                "required": ["case_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "submit_dispute_evidence",
+            "description": "Submit evidence artifacts for an open dispute.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_id": {"type": "string"},
+                    "evidence_fields": {"type": "array", "items": {"type": "string"}},
+                    "notes": {"type": "string"},
+                },
+                "required": ["case_id", "evidence_fields"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "refund_pre_dispute_alert",
+            "description": "Refund a pre-dispute alert (inquiry or RDR) proactively.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_id": {"type": "string"},
+                    "approved_amount": {"type": "number"},
+                    "notes": {"type": "string"},
+                },
+                "required": ["case_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "resolve_prearbitration",
+            "description": "Resolve a pre-arbitration stage by accepting or contesting.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_id": {"type": "string"},
+                    "prearbitration_decision": {"type": "string", "enum": ["accept", "contest"]},
+                    "notes": {"type": "string"},
+                },
+                "required": ["case_id", "prearbitration_decision"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_message",
+            "description": "Send required customer communication (refund_approved or case_closed template).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_id": {"type": "string"},
+                    "template_id": {"type": "string", "enum": ["refund_approved", "case_closed"]},
+                    "resolution": {"type": "string"},
+                },
+                "required": ["case_id", "template_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_to_qa",
+            "description": "Route a resolved case to QA review when required.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_id": {"type": "string"},
+                    "assignee_type": {"type": "string", "default": "qa_reviewer"},
+                    "notes": {"type": "string"},
+                },
+                "required": ["case_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "approve_qa",
+            "description": "Approve a case that is waiting in QA.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_id": {"type": "string"},
+                    "assignee_type": {"type": "string", "default": "qa_reviewer"},
+                    "notes": {"type": "string"},
+                },
+                "required": ["case_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "close_case",
+            "description": "Close a fully resolved refund case to finish the episode.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_id": {"type": "string"},
+                    "resolution_code": {"type": "string", "default": "resolved"},
+                },
+                "required": ["case_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "advance_clock",
+            "description": "Advance simulated time (1–480 minutes) to receive pending events or dispute responses.",
+            "parameters": {
+                "type": "object",
+                "properties": {"minutes": {"type": "integer", "minimum": 1, "maximum": 480}},
+                "required": ["minutes"],
+            },
+        },
+    },
+]
+
 
 def build_refund_grpo_prompt_dataset(num_examples: int = 256) -> list[dict[str, Any]]:
     """Builds a small conversational prompt dataset for refund-only GRPO runs."""

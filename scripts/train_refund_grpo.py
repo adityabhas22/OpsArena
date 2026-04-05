@@ -6,6 +6,7 @@ from dataclasses import fields
 from functools import partial
 
 from opsarena.training import (
+    REFUND_TOOL_SCHEMAS,
     RefundExceptionToolEnv,
     build_refund_grpo_prompt_dataset,
     refund_terminal_benchmark_reward,
@@ -109,20 +110,26 @@ def main() -> None:
 
     processing_class = prepare_tokenizer_for_grpo(args.model)
 
-    trainer = GRPOTrainer(
-        model=args.model,
-        processing_class=processing_class,
-        reward_funcs=refund_terminal_benchmark_reward,
-        train_dataset=train_dataset,
-        peft_config=LoraConfig(
+    import inspect
+    trainer_kwargs: dict = {
+        "model": args.model,
+        "processing_class": processing_class,
+        "reward_funcs": refund_terminal_benchmark_reward,
+        "train_dataset": train_dataset,
+        "peft_config": LoraConfig(
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
             target_modules="all-linear",
             task_type="CAUSAL_LM",
         ),
-        args=config,
-        environment_factory=partial(RefundExceptionToolEnv, random_seed=args.seed),
-    )
+        "args": config,
+        "environment_factory": partial(RefundExceptionToolEnv, random_seed=args.seed),
+    }
+    # Pass tool schemas if GRPOTrainer supports them (TRL ≥ post-1.0 adds tools= for
+    # environment_factory training so the tokenizer embeds tool definitions in the prompt).
+    if "tools" in inspect.signature(GRPOTrainer.__init__).parameters:
+        trainer_kwargs["tools"] = REFUND_TOOL_SCHEMAS
+    trainer = GRPOTrainer(**trainer_kwargs)
     trainer.train()
     trainer.save_model(args.output_dir)
 
