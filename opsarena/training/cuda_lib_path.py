@@ -83,6 +83,25 @@ def _find_lib_dirs() -> list[str]:
     return dirs
 
 
+def _diagnose_torch_libs() -> None:
+    """Print what's in torch/lib so we can debug missing libtorch_cuda.so."""
+    try:
+        import torch as _torch
+        torch_lib = os.path.join(os.path.dirname(_torch.__file__), "lib")
+        print(f"[cuda_lib_path] torch.__version__={_torch.__version__}")
+        print(f"[cuda_lib_path] torch.cuda.is_available()={_torch.cuda.is_available()}")
+        print(f"[cuda_lib_path] torch/lib dir: {torch_lib}")
+        if os.path.isdir(torch_lib):
+            libs = sorted(f for f in os.listdir(torch_lib) if "torch" in f or "c10" in f or "cuda" in f)
+            print(f"[cuda_lib_path] torch/lib CUDA-related files: {libs}")
+            target = os.path.join(torch_lib, "libtorch_cuda.so")
+            print(f"[cuda_lib_path] libtorch_cuda.so exists: {os.path.isfile(target)}")
+        else:
+            print(f"[cuda_lib_path] torch/lib does NOT exist")
+    except Exception as exc:
+        print(f"[cuda_lib_path] diagnosis failed: {exc}")
+
+
 def prepend_nvidia_cuda_runtime_lib_path() -> None:
     """Ensure torch/lib and cudart paths are on LD_LIBRARY_PATH.
 
@@ -93,6 +112,8 @@ def prepend_nvidia_cuda_runtime_lib_path() -> None:
     Must be called before ``from trl import GRPOTrainer``.
     """
     if os.environ.get(_ENV_MARKER):
+        _diagnose_torch_libs()
+        print(f"[cuda_lib_path] LD_LIBRARY_PATH={os.environ.get('LD_LIBRARY_PATH', '')}")
         return
 
     needed = _find_lib_dirs()
