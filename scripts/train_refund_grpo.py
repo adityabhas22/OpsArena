@@ -9,6 +9,7 @@ from opsarena.training import (
     build_refund_grpo_prompt_dataset,
     refund_terminal_benchmark_reward,
 )
+from opsarena.training.trl_tokenizer import prepare_tokenizer_for_grpo
 
 
 def _build_grpo_config(args: argparse.Namespace, GRPOConfig: type) -> object:
@@ -80,8 +81,11 @@ def main() -> None:
 
     config = _build_grpo_config(args, GRPOConfig)
 
+    processing_class = prepare_tokenizer_for_grpo(args.model)
+
     trainer = GRPOTrainer(
         model=args.model,
+        processing_class=processing_class,
         reward_funcs=refund_terminal_benchmark_reward,
         train_dataset=train_dataset,
         peft_config=LoraConfig(
