@@ -1,0 +1,11 @@
+task_id: ap_payment_run
+difficulty: hard
+initial_time: 600
+description: >
+  AP payment-run recovery scenario with three invoice cases exercising
+  batch management, vendor recovery, and write-off decisions.
+atomic_factors:
+  payment_batch_timing: [pre_batch, in_batch, post_batch]
+  vendor_responsiveness: [responsive, unresponsive]
+  recovery_path: [credit_memo, vendor_refund, write_off]
+  sla_tightness: [standard, tight]

@@ -96,3 +96,4 @@ class TaskId(StrEnum):
     REFUND_EXCEPTION = "refund_exception"
     INVOICE_PLUS_KYC = "invoice_plus_kyc"
     QUEUE_TRIAGE = "queue_triage"
+    AP_PAYMENT_RUN = "ap_payment_run"

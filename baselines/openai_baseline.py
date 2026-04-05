@@ -47,7 +47,7 @@ def main() -> None:
     parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument("--seed", type=int, default=7)
     args = parser.parse_args()
-    for task_id in ("refund_exception", "invoice_plus_kyc", "queue_triage"):
+    for task_id in ("refund_exception", "invoice_plus_kyc", "queue_triage", "ap_payment_run"):
         state = run_task(args.base_url, task_id, args.model, args.seed)
         print(json.dumps({"task_id": task_id, "state": state}, indent=2))
 

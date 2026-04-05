@@ -30,6 +30,7 @@ from opsarena.domain.events import (
     ArrivalWaveRecordBundle,
     InquiryEscalatesToChargebackEvent,
     MonitoringThresholdBreachedEvent,
+    PaymentBatchExecutedEvent,
     SLABreachEvent,
     StaffingDropEvent,
 )
@@ -69,6 +70,7 @@ def _load_template(task_id: TaskId) -> dict:
         TaskId.REFUND_EXCEPTION: ROOT / "data" / "scenario_templates" / "task1_refund" / "template.yaml",
         TaskId.INVOICE_PLUS_KYC: ROOT / "data" / "scenario_templates" / "task2_invoice_kyc" / "template.yaml",
         TaskId.QUEUE_TRIAGE: ROOT / "data" / "scenario_templates" / "task3_triage" / "template.yaml",
+        TaskId.AP_PAYMENT_RUN: ROOT / "data" / "scenario_templates" / "task4_ap_payment_run" / "template.yaml",
     }
     return yaml.safe_load(mapping[task_id].read_text())
 
@@ -554,7 +556,7 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
         }
         state.queue_order = [invoice_case.case_id, kyc_case.case_id]
         state.metadata["max_steps"] = 35
-    else:
+    elif task_id == TaskId.QUEUE_TRIAGE:
         triage_cases: list[CaseState] = []
         combined = RecordStore()
         for idx in range(2):
@@ -695,6 +697,86 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
                 at_time=current_time + 18,
                 capacity_delta=1,
                 affected_owners=["analyst_2"],
+            )
+        )
+        state.scheduled_events.sort(key=lambda event: event.at_time)
+
+    elif task_id == TaskId.AP_PAYMENT_RUN:
+        # Case 1: Overpayment with scheduled payment batch — needs batch removal + vendor recovery
+        case1, records1 = _invoice_case(
+            current_time, task_id, duplicate=False, latency_minutes=25,
+        )
+        case1.case_id = "case_ap_overpayment"
+        case1.priority = int(Priority.HIGH)
+        case1.sla_deadline = current_time + 60
+        case1.amount = 245.0
+        case1.visible_summary = "Invoice overpayment of $24.50 with payment batch running soon"
+        case1.visible_flags = ["variance", "payment_batch_scheduled"]
+        case1.workflow.match_status = MatchStatus.VARIANCE
+        case1.workflow.variance_amount = 24.5
+        case1.workflow.tolerance_percent = 3.0
+        case1.workflow.payment_batch_id = "batch_001"
+        case1.workflow.payment_batch_status = PaymentBatchStatus.SCHEDULED
+        case1.workflow.write_off_threshold = 15.0
+        case1.hidden.true_variance_within_tolerance = False
+        case1.hidden.true_vendor_will_respond = True
+        case1.hidden.true_vendor_response_minutes = 25
+        case1.hidden.true_recoverable_amount = 24.5
+
+        # Case 2: Post-batch stop payment needed — duplicate detected after batch executed
+        case2, records2 = _invoice_case(
+            current_time + 1, task_id, duplicate=True, latency_minutes=30,
+        )
+        case2.case_id = "case_ap_stop_payment"
+        case2.priority = int(Priority.CRITICAL)
+        case2.sla_deadline = current_time + 45
+        case2.amount = 620.0
+        case2.visible_summary = "Duplicate invoice paid in latest batch — stop payment may be possible"
+        case2.visible_flags = ["duplicate_check", "payment_batch_completed"]
+        case2.workflow.duplicate_status = DuplicateStatus.SUSPECTED
+        case2.workflow.payment_batch_id = "batch_002"
+        case2.workflow.payment_batch_status = PaymentBatchStatus.COMPLETED
+        case2.workflow.stop_payment_window_until = current_time + 35
+        case2.hidden.true_stop_payment_success = bool(rng.randint(0, 1))
+
+        # Case 3: Small balance write-off — vendor unresponsive, tiny variance
+        case3, records3 = _invoice_case(
+            current_time + 2, task_id, duplicate=False, latency_minutes=60,
+        )
+        case3.case_id = "case_ap_write_off"
+        case3.priority = int(Priority.LOW)
+        case3.sla_deadline = current_time + 90
+        case3.amount = 52.0
+        case3.visible_summary = "Small invoice variance — vendor unresponsive, write-off candidate"
+        case3.visible_flags = ["variance", "small_balance"]
+        case3.workflow.match_status = MatchStatus.VARIANCE
+        case3.workflow.variance_amount = 8.50
+        case3.workflow.tolerance_percent = 3.0
+        case3.workflow.write_off_threshold = 25.0
+        case3.hidden.true_variance_within_tolerance = False
+        case3.hidden.true_vendor_will_respond = False
+        case3.hidden.true_recoverable_amount = 0.0
+
+        combined = RecordStore(
+            invoices={**records1.invoices, **records2.invoices, **records3.invoices},
+            purchase_orders={**records1.purchase_orders, **records2.purchase_orders, **records3.purchase_orders},
+            receipts={**records1.receipts, **records2.receipts, **records3.receipts},
+            policies={**records1.policies, **records2.policies, **records3.policies},
+            message_templates={**records1.message_templates, **records2.message_templates, **records3.message_templates},
+        )
+        _add_shared_templates(combined)
+        state.records = combined
+        state.cases = {c.case_id: c for c in [case1, case2, case3]}
+        state.queue_order = [case2.case_id, case1.case_id, case3.case_id]  # priority order
+        state.metadata["max_steps"] = 45
+
+        # Batch executes for case1 soon — agent must remove before it runs
+        state.scheduled_events.append(
+            PaymentBatchExecutedEvent(
+                event_id="evt-batch-001",
+                at_time=current_time + 15,
+                case_id=case1.case_id,
+                batch_id="batch_001",
             )
         )
         state.scheduled_events.sort(key=lambda event: event.at_time)

@@ -33,9 +33,12 @@ from opsarena.models import (
     SubmitDisputeEvidenceAction,
     StartEDDReviewAction,
     SetPayoutDelayDaysAction,
+    RequestRevisedInvoiceAction,
     SetReservePercentAction,
+    StopPaymentAction,
     ViewRecordAction,
     ReviewKYCAction,
+    WriteOffSmallBalanceAction,
 )
 from opsarena.enums import ReasonCode, VerificationDecision
 
@@ -154,9 +157,21 @@ def run_oracle(task_id: str, seed: int = 7) -> dict:
         elif case.case_type.value == "invoice":
             workflow = case.workflow
             assert isinstance(workflow, InvoiceWorkflowState)
+            # Remove from payment batch if duplicate or variance
             if workflow.payment_batch_status in {PaymentBatchStatus.SCHEDULED, PaymentBatchStatus.IN_PROGRESS}:
-                if case.hidden.true_is_duplicate:
+                if case.hidden.true_is_duplicate or (workflow.variance_amount and workflow.variance_amount > 0):
                     env.step(RemoveFromPaymentBatchAction(case_id=case_id))
+            # Stop payment if batch already executed and window is open
+            refreshed_wf = env._state.cases[case_id].workflow
+            assert isinstance(refreshed_wf, InvoiceWorkflowState)
+            if (
+                refreshed_wf.payment_batch_status == PaymentBatchStatus.COMPLETED
+                and refreshed_wf.stop_payment_window_until is not None
+                and env._state.current_time <= refreshed_wf.stop_payment_window_until
+                and case.hidden.true_is_duplicate
+            ):
+                env.step(StopPaymentAction(case_id=case_id))
+                env.step(AdvanceClockAction(minutes=6))
             if case.resolution.value != "pending":
                 pass
             elif case.hidden.true_is_duplicate:
@@ -170,19 +185,37 @@ def run_oracle(task_id: str, seed: int = 7) -> dict:
                     receipt = next(record.record_id for record in env._state.cases[case_id].linked_records if record.record_type.value == "receipt")
                     env.step(ViewRecordAction(record_type="receipt", record_id=receipt))
                 env.step(QueryPolicyAction(policy_id="invoice_policy"))
+                # Handle variance recovery
+                cur_wf = env._state.cases[case_id].workflow
+                assert isinstance(cur_wf, InvoiceWorkflowState)
+                if cur_wf.variance_amount and cur_wf.variance_amount > 0:
+                    if cur_wf.variance_amount <= cur_wf.write_off_threshold:
+                        env.step(WriteOffSmallBalanceAction(case_id=case_id, reason_code=ReasonCode.COMPLETE))
+                    elif case.hidden.true_vendor_will_respond:
+                        env.step(RequestRevisedInvoiceAction(case_id=case_id, reason_code=ReasonCode.THRESHOLD_EXCEEDED))
+                        env.step(AdvanceClockAction(minutes=case.hidden.true_vendor_response_minutes or 25))
+                        post_wf = env._state.cases[case_id].workflow
+                        assert isinstance(post_wf, InvoiceWorkflowState)
+                        if post_wf.credit_memo_status.value == "received":
+                            memo_id = next(
+                                (r.record_id for r in env._state.cases[case_id].linked_records if r.record_type.value == "credit_memo"),
+                                None,
+                            )
+                            if memo_id:
+                                env.step(ApplyCreditMemoAction(case_id=case_id, credit_memo_id=memo_id))
                 if workflow.secondary_approval_required:
                     env.step(SendForSecondaryApprovalAction(case_id=case_id, reason_code="threshold_exceeded"))
                     env.step(AdvanceClockAction(minutes=15))
-                invoice_workflow = env._state.cases[case_id].workflow
-                assert isinstance(invoice_workflow, InvoiceWorkflowState)
-                if invoice_workflow.credit_memo_status.value == "received":
+                final_wf = env._state.cases[case_id].workflow
+                assert isinstance(final_wf, InvoiceWorkflowState)
+                if final_wf.credit_memo_status.value == "received":
                     memo_id = next(
                         (r.record_id for r in env._state.cases[case_id].linked_records if r.record_type.value == "credit_memo"),
                         None,
                     )
                     if memo_id:
                         env.step(ApplyCreditMemoAction(case_id=case_id, credit_memo_id=memo_id))
-                if invoice_workflow.payment_hold:
+                if final_wf.payment_hold:
                     env.step(ReleasePaymentHoldAction(case_id=case_id))
                 env.step(ApproveAction(case_id=case_id))
             if env._state.cases[case_id].qa_required:
