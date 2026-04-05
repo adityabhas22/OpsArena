@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import warnings
 from dataclasses import fields
 from functools import partial
 
@@ -40,7 +41,23 @@ def _build_grpo_config(args: argparse.Namespace, GRPOConfig: type) -> object:
 
     valid = {f.name for f in fields(GRPOConfig)}
     filtered = {k: v for k, v in candidate.items() if k in valid}
-    return GRPOConfig(**filtered)
+    dropped = set(candidate) - set(filtered)
+    if dropped:
+        warnings.warn(
+            "GRPOConfig in this TRL build does not accept these kwargs (they were ignored): "
+            + ", ".join(sorted(dropped))
+            + ". Training will use TRL defaults for those settings — check trl.__version__.",
+            stacklevel=2,
+        )
+    config = GRPOConfig(**filtered)
+    # One place to read what actually runs (helps debug “stuck” metrics / odd completion lengths).
+    mcl = getattr(config, "max_completion_length", None)
+    print(
+        "[train_refund_grpo] trl GRPOConfig: "
+        f"max_completion_length={mcl!r}, num_generations={getattr(config, 'num_generations', None)!r}, "
+        f"use_vllm={getattr(config, 'use_vllm', None)!r}"
+    )
+    return config
 
 
 def parse_args() -> argparse.Namespace:
@@ -77,6 +94,7 @@ def main() -> None:
     try:
         from datasets import Dataset
         from peft import LoraConfig
+        import trl
         from trl import GRPOConfig, GRPOTrainer
     except ImportError as exc:  # pragma: no cover - exercised only in training environments
         raise SystemExit(
@@ -86,6 +104,7 @@ def main() -> None:
 
     train_dataset = Dataset.from_list(build_refund_grpo_prompt_dataset(args.num_examples))
 
+    print(f"[train_refund_grpo] trl.__version__={getattr(trl, '__version__', '?')}")
     config = _build_grpo_config(args, GRPOConfig)
 
     processing_class = prepare_tokenizer_for_grpo(args.model)
