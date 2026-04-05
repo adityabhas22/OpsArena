@@ -6,7 +6,15 @@ from opsarena.domain.workflows.refund import DisputeStage, RefundWorkflowState
 from opsarena.engine.state import CaseState, WorldState
 
 
-QUEUE_ACTIONS = ["list_queue", "search_cases", "batch_reorder", "advance_clock"]
+QUEUE_ACTIONS = [
+    "list_queue",
+    "search_cases",
+    "batch_reorder",
+    "bulk_assign",
+    "bulk_route",
+    "rebalance_queue",
+    "advance_clock",
+]
 COMMON_CASE_ACTIONS = [
     "inspect_audit",
     "log_internal_note",

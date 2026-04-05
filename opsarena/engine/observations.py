@@ -89,6 +89,8 @@ def render_queue_view(state: WorldState) -> list[QueueItem]:
                 sla_remaining_minutes=case.sla_deadline - state.current_time,
                 summary=case.visible_summary,
                 status=case.status,
+                current_owner=case.current_owner,
+                active_queue=case.active_queue,
                 amount=case.amount or None,
                 customer_name=customer_name,
                 flags=case.visible_flags,
@@ -245,6 +247,20 @@ def render_observation(
             "approval_queue": {
                 "load": state.metadata.get("approval_queue_load", 0),
                 "capacity": state.metadata.get("approval_queue_capacity", 1),
+            },
+            "agent_loads": {
+                owner: sum(
+                    1
+                    for case in state.cases.values()
+                    if case.status != "closed" and case.current_owner == owner
+                )
+                for owner in sorted(
+                    {
+                        case.current_owner
+                        for case in state.cases.values()
+                        if case.current_owner not in {"queue", "ops_agent"}
+                    }
+                )
             },
         },
     )

@@ -7,11 +7,14 @@ from opsarena.models import (
     ApproveQAAction,
     ApproveAction,
     ClaimCaseAction,
+    BulkAssignAction,
+    BulkRouteAction,
     ExecuteRefundAction,
     FailQAAction,
     OpenCaseAction,
     PauseSLAAction,
     PlacePaymentHoldAction,
+    RebalanceQueueAction,
     RecordThreeWayMatchAction,
     ReleasePaymentHoldAction,
     RequestCreditMemoAction,
@@ -261,3 +264,40 @@ def test_qa_failure_reopens_case_for_rework_and_blocks_close():
     approved = env.step(ApproveQAAction(case_id="case_invoice_2", assignee_type="qa_reviewer"))
     assert approved.case_detail is not None
     assert approved.case_detail.workflow_metadata["qa_status"] == "passed"
+
+
+def test_supervisor_bulk_assign_route_and_rebalance_update_queue_state():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+
+    rebalanced = env.step(
+        RebalanceQueueAction(
+            assignee_pool=["analyst_1", "analyst_2"],
+            max_cases=3,
+            rebalance_strategy="sla_priority",
+        )
+    )
+    assert rebalanced.error is None
+    assert env._state.cases["case_refund_1"].current_owner in {"analyst_1", "analyst_2"}
+    assert env._state.queue_state().unassigned_count == 2
+
+    bulk_assigned = env.step(
+        BulkAssignAction(
+            case_ids=["case_invoice_1", "case_kyc_triage"],
+            assignee_type="analyst_3",
+        )
+    )
+    assert bulk_assigned.error is None
+    assert env._state.cases["case_invoice_1"].current_owner == "analyst_3"
+    assert env._state.cases["case_kyc_triage"].current_owner == "analyst_3"
+
+    bulk_routed = env.step(
+        BulkRouteAction(
+            case_ids=["case_refund_2", "case_invoice_1"],
+            target_queue=TargetQueue.MANAGER_REVIEW,
+            reason_code=ReasonCode.THRESHOLD_EXCEEDED,
+        )
+    )
+    assert bulk_routed.error is None
+    assert env._state.cases["case_refund_2"].active_queue == "manager_review"
+    assert env._state.cases["case_invoice_1"].route_history[-1].queue == "manager_review"

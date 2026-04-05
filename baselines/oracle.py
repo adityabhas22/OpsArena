@@ -14,6 +14,7 @@ from opsarena.models import (
     OpenCaseAction,
     QueryPolicyAction,
     RejectAction,
+    RebalanceQueueAction,
     ReleasePaymentHoldAction,
     RequestInfoAction,
     SendForSecondaryApprovalAction,
@@ -26,6 +27,8 @@ def run_oracle(task_id: str, seed: int = 7) -> dict:
     env = OpsArenaEnvironment()
     env.reset(task_id=task_id, seed=seed)
     assert env._state is not None
+    if task_id == "queue_triage":
+        env.step(RebalanceQueueAction(assignee_pool=["analyst_1", "analyst_2"], max_cases=3, rebalance_strategy="sla_priority"))
     for case_id in list(env._state.queue_order):
         case = env._state.cases[case_id]
         env.step(OpenCaseAction(case_id=case_id))

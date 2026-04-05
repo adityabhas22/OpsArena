@@ -1,5 +1,5 @@
 from server.environment import OpsArenaEnvironment
-from opsarena.engine.graders import grade_episode, grade_trajectory
+from opsarena.engine.graders import grade_efficiency, grade_episode, grade_trajectory
 from opsarena.models import (
     AdvanceClockAction,
     ApproveAction,
@@ -7,6 +7,7 @@ from opsarena.models import (
     FailQAAction,
     OpenCaseAction,
     QueryPolicyAction,
+    RebalanceQueueAction,
     ScheduleFollowUpAction,
     SendToQAAction,
     SendForSecondaryApprovalAction,
@@ -58,3 +59,12 @@ def test_grader_penalizes_failed_qa_rework():
     env.step(FailQAAction(case_id="case_invoice_2", assignee_type="qa_reviewer", reason_code="missing_documentation"))
     env.step(AdvanceClockAction(minutes=env._state.cases["case_invoice_2"].hidden.hidden_follow_up_latency_minutes or 30))
     assert grade_trajectory(env._state) < 1.0
+
+
+def test_rebalance_improves_queue_efficiency_signal():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="queue_triage", seed=7)
+    baseline = grade_efficiency(env._state)
+    env.step(RebalanceQueueAction(assignee_pool=["analyst_1", "analyst_2"], max_cases=3, rebalance_strategy="sla_priority"))
+    improved = grade_efficiency(env._state)
+    assert improved > baseline

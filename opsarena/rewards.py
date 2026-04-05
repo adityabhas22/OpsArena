@@ -996,6 +996,7 @@ class QueueRewardParams:
     sla_health_bonus: float = 15.0
     risk_concentration_penalty: float = -8.0
     backlog_coefficient: float = 5.0
+    assignment_health_bonus: float = 4.0
     escalation_overload_penalty: float = -10.0
     escalation_overload_threshold: float = 0.8  # fraction of capacity
 
@@ -1064,6 +1065,13 @@ def compute_queue_reward(
         breakdown["backlog_health"] = p.backlog_coefficient * backlog_change
     else:
         breakdown["backlog_health"] = p.backlog_coefficient  # started empty, stayed empty
+
+    # --- Assignment health ---
+    if queue.exception_queue_size > 0:
+        assigned_ratio = 1.0 - (queue.unassigned_count / max(1, queue.exception_queue_size))
+        breakdown["assignment_health"] = p.assignment_health_bonus * max(0.0, assigned_ratio)
+    else:
+        breakdown["assignment_health"] = p.assignment_health_bonus
 
     # --- Escalation overload ---
     esc_ratio = queue.escalation_queue_load / max(1, queue.escalation_queue_capacity)
@@ -1756,9 +1764,23 @@ def phi_triage(queue: QueueState) -> float:
         queue.escalation_queue_load / max(1, queue.escalation_queue_capacity)
     )
     phi += 0.25 * max(0.0, esc_health)
+    if queue.exception_queue_size > 0:
+        assignment_health = 1.0 - (queue.unassigned_count / max(1, queue.exception_queue_size))
+        phi += 0.15 * max(0.0, assignment_health)
     if queue.overdue_follow_ups > 0:
         phi -= min(0.15, 0.05 * queue.overdue_follow_ups)
     return phi
+
+
+def compute_queue_shaping_reward(
+    queue: QueueState,
+    prev_queue: QueueState | None = None,
+    gamma: float = 0.99,
+    shaping_lambda: float = 0.5,
+) -> float:
+    phi_now = phi_triage(queue)
+    phi_prev = phi_triage(prev_queue) if prev_queue else 0.0
+    return shaping_lambda * (gamma * phi_now - phi_prev)
 
 
 def compute_shaping_reward(

@@ -112,11 +112,12 @@ def grade_efficiency(state: WorldState) -> float:
     step_score = max(0.0, 1.0 - max(0, state.step_count - len(cases) * 8) / max(1, len(cases) * 20))
     follow_up_score = max(0.0, 1.0 - state.metrics.follow_ups_overdue / max(1, len(cases)))
     qa_score = max(0.0, 1.0 - (state.metrics.qa_reviews_failed + state.metrics.qa_rework_overdue) / max(1, len(cases) * 2))
+    assignment_score = max(0.0, 1.0 - state.queue_state().unassigned_count / max(1, len(cases)))
     if state.task_id == TaskId.QUEUE_TRIAGE:
         optimal_order = [case.case_id for case in sorted(cases, key=lambda item: (item.priority, item.sla_deadline))]
         tau = max(0.0, _kendall_tau([entry.case_id for entry in state.audit_log if entry.case_id], optimal_order))
-        return (sla_score + step_score + tau + follow_up_score + qa_score) / 5
-    return (sla_score + step_score + follow_up_score + qa_score) / 4
+        return (sla_score + step_score + tau + follow_up_score + qa_score + assignment_score) / 6
+    return (sla_score + step_score + follow_up_score + qa_score + assignment_score) / 5
 
 
 def grade_episode(state: WorldState) -> dict:

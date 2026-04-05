@@ -8,7 +8,13 @@ from opsarena.engine.scheduler import process_due_events
 from opsarena.engine.state import WorldState
 from opsarena.enums import CaseType, TaskId
 from opsarena.models import AdvanceClockAction, OpsAction
-from opsarena.rewards import RewardBreakdown, compute_queue_reward, compute_shaping_reward, compute_step_reward
+from opsarena.rewards import (
+    RewardBreakdown,
+    compute_queue_reward,
+    compute_queue_shaping_reward,
+    compute_shaping_reward,
+    compute_step_reward,
+)
 
 
 def _append_audit(state: WorldState, case_id: str | None, action_type: str, message: str, success: bool = True) -> None:
@@ -72,7 +78,10 @@ def apply_action(state: WorldState, action: OpsAction) -> TransitionResult:
                 prev_queue=prev_queue,
             )
         else:
-            shaping_reward = 0.0
+            shaping_reward = compute_queue_shaping_reward(
+                queue=state.queue_state(),
+                prev_queue=prev_queue,
+            )
 
         objective_reward = reward_breakdown.objective_total
         if state.task_id == TaskId.QUEUE_TRIAGE and all(item.status == "closed" for item in state.cases.values()):

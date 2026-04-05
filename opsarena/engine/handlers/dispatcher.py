@@ -16,6 +16,7 @@ from opsarena.engine.handlers.refund import (
     handle_submit_dispute_evidence,
 )
 from opsarena.engine.handlers.result import TransitionResult
+from opsarena.engine.handlers.supervisor import handle_bulk_assign, handle_bulk_route, handle_rebalance_queue
 from opsarena.engine.handlers.shared import (
     handle_advance_clock,
     handle_approve,
@@ -55,6 +56,8 @@ from opsarena.models import (
     ApproveAction,
     AssignAction,
     BatchReorderAction,
+    BulkAssignAction,
+    BulkRouteAction,
     ClaimCaseAction,
     CloseCaseAction,
     DeferAction,
@@ -70,6 +73,7 @@ from opsarena.models import (
     PlacePaymentHoldAction,
     PrioritizeAction,
     QueryPolicyAction,
+    RebalanceQueueAction,
     RecordThreeWayMatchAction,
     RejectAction,
     ReleasePaymentHoldAction,
@@ -103,6 +107,8 @@ ACTION_HANDLERS: dict[type, ActionHandler] = {
     SendMessageAction: handle_send_message,
     RequestInfoAction: handle_request_info,
     AssignAction: handle_assign,
+    BulkAssignAction: handle_bulk_assign,
+    BulkRouteAction: handle_bulk_route,
     ClaimCaseAction: handle_claim_case,
     ReturnToQueueAction: handle_return_to_queue,
     RouteCaseAction: handle_route_case,
@@ -126,6 +132,7 @@ ACTION_HANDLERS: dict[type, ActionHandler] = {
     SendForSecondaryApprovalAction: handle_send_for_secondary_approval,
     ReviewKYCAction: handle_review_kyc,
     TriggerReverificationAction: handle_trigger_reverification,
+    RebalanceQueueAction: handle_rebalance_queue,
     ApproveAction: handle_approve,
     RejectAction: handle_reject,
     CloseCaseAction: handle_close_case,

@@ -2,9 +2,12 @@ from .client import OpsArenaEnv
 from .models import (
     AcceptDisputeAction,
     AdvanceClockAction,
+    ApproveQAAction,
     ApproveAction,
     AssignAction,
     BatchReorderAction,
+    BulkAssignAction,
+    BulkRouteAction,
     ClaimCaseAction,
     CloseCaseAction,
     DeferAction,
@@ -21,6 +24,7 @@ from .models import (
     PlacePaymentHoldAction,
     PrioritizeAction,
     QueryPolicyAction,
+    RebalanceQueueAction,
     RecordThreeWayMatchAction,
     RawOpsAction,
     RejectAction,
@@ -40,7 +44,6 @@ from .models import (
     SubmitDisputeEvidenceAction,
     TriggerReverificationAction,
     ViewRecordAction,
-    ApproveQAAction,
 )
 
 __all__ = [
@@ -49,6 +52,8 @@ __all__ = [
     "ApproveAction",
     "AssignAction",
     "BatchReorderAction",
+    "BulkAssignAction",
+    "BulkRouteAction",
     "ClaimCaseAction",
     "CloseCaseAction",
     "DeferAction",
@@ -66,6 +71,7 @@ __all__ = [
     "PlacePaymentHoldAction",
     "PrioritizeAction",
     "QueryPolicyAction",
+    "RebalanceQueueAction",
     "RecordThreeWayMatchAction",
     "RawOpsAction",
     "RejectAction",

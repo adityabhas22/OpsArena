@@ -24,6 +24,8 @@ class QueueItem(BaseModel):
     sla_remaining_minutes: int
     summary: str
     status: str
+    current_owner: str | None = None
+    active_queue: str | None = None
     amount: float | None = None
     customer_name: str | None = None
     flags: list[str] = Field(default_factory=list)
@@ -115,6 +117,7 @@ class OpsArenaState(State):
 class RawOpsAction(Action):
     action_type: str
     case_id: str | None = None
+    case_ids: list[str] | None = None
     sort_by: SortField | None = None
     filters: dict[str, Any] | None = None
     limit: int | None = None
@@ -137,6 +140,7 @@ class RawOpsAction(Action):
     note_metadata: dict[str, Any] | None = None
     new_priority: Priority | None = None
     ordering_rule: str | None = None
+    rebalance_strategy: str | None = None
     follow_up_at: int | None = None
     minutes: int | None = None
     resolution_code: str | None = None
@@ -145,6 +149,8 @@ class RawOpsAction(Action):
     variance_amount: float | None = None
     verification_decision: VerificationDecision | None = None
     requirements: list[str] | None = None
+    assignee_pool: list[str] | None = None
+    max_cases: int | None = None
 
 
 class ListQueueAction(Action):
@@ -372,6 +378,33 @@ class TriggerReverificationAction(Action):
     notes: str | None = None
 
 
+class BulkAssignAction(Action):
+    action_type: Literal["bulk_assign"] = "bulk_assign"
+    case_ids: list[str] = Field(min_length=1, max_length=10)
+    assignee_type: str
+
+
+class BulkRouteAction(Action):
+    action_type: Literal["bulk_route"] = "bulk_route"
+    case_ids: list[str] = Field(min_length=1, max_length=10)
+    target_queue: TargetQueue
+    reason_code: ReasonCode
+    assignee_type: str | None = None
+
+
+class RebalanceQueueAction(Action):
+    action_type: Literal["rebalance_queue"] = "rebalance_queue"
+    assignee_pool: list[str] = Field(min_length=1, max_length=10)
+    max_cases: int = Field(default=3, ge=1, le=10)
+    rebalance_strategy: str = "sla_priority"
+
+    @model_validator(mode="after")
+    def validate_strategy(self) -> "RebalanceQueueAction":
+        if self.rebalance_strategy not in {"sla_priority", "oldest", "amount"}:
+            raise ValueError("invalid_rebalance_strategy")
+        return self
+
+
 class SendToQAAction(Action):
     action_type: Literal["send_to_qa"] = "send_to_qa"
     case_id: str
@@ -425,6 +458,8 @@ OpsAction = Annotated[
         | DeferAction
         | RequestInfoAction
         | AssignAction
+        | BulkAssignAction
+        | BulkRouteAction
         | ClaimCaseAction
         | ReturnToQueueAction
         | RouteCaseAction
@@ -445,6 +480,7 @@ OpsAction = Annotated[
         | SendForSecondaryApprovalAction
         | ReviewKYCAction
         | TriggerReverificationAction
+        | RebalanceQueueAction
         | SendToQAAction
         | ApproveQAAction
         | FailQAAction
