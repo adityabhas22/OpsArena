@@ -6,6 +6,7 @@ description: >
   batch management, vendor recovery, and write-off decisions.
 atomic_factors:
   payment_batch_timing: [pre_batch, in_batch, post_batch]
-  vendor_responsiveness: [responsive, unresponsive]
-  recovery_path: [credit_memo, vendor_refund, write_off]
+  vendor_responsiveness: [responsive, slow, unresponsive]
+  recovery_path: [credit_memo, revised_invoice, vendor_refund, write_off]
   sla_tightness: [standard, tight]
+  stop_payment_success: [likely, mixed]

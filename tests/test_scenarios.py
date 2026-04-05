@@ -2,6 +2,7 @@ from opsarena.domain.workflows.invoice import InvoiceWorkflowState
 from opsarena.domain.workflows.kyc import KYCWorkflowState
 from opsarena.domain.workflows.refund import DisputeStage, RefundWorkflowState
 from opsarena.engine.scenarios import build_task_state
+import json
 
 
 def test_scenarios_are_seeded_and_deterministic():
@@ -43,3 +44,30 @@ def test_queue_triage_seed_contains_richer_workflow_metadata():
     assert "staffing_drop" in scheduled_event_types
     assert "inquiry_escalates_to_chargeback" in scheduled_event_types
     assert "monitoring_threshold_breached" in scheduled_event_types
+
+
+def test_scenario_generators_produce_nontrivial_diversity_across_seeds():
+    minimum_unique = {
+        "refund_exception": 10,
+        "invoice_plus_kyc": 10,
+        "queue_triage": 4,
+        "ap_payment_run": 10,
+    }
+    for task_id, threshold in minimum_unique.items():
+        seen = set()
+        for seed in range(1, 21):
+            state = build_task_state(task_id, seed=seed)
+            signature = []
+            for case_id in sorted(state.cases):
+                case = state.cases[case_id]
+                signature.append(
+                    (
+                        case_id,
+                        case.visible_summary,
+                        tuple(case.visible_flags),
+                        case.hidden.model_dump(),
+                        case.workflow.model_dump(),
+                    )
+                )
+            seen.add(json.dumps(signature, sort_keys=True, default=str))
+        assert len(seen) >= threshold

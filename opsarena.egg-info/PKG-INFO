@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: opsarena
+Version: 0.1.0
+Summary: High-fidelity ecommerce operations OpenEnv environment
+Requires-Python: >=3.11
+Requires-Dist: openenv-core>=0.2.3
+Requires-Dist: pydantic>=2.10
+Requires-Dist: pyyaml>=6.0
+Provides-Extra: dev
+Requires-Dist: httpx>=0.28; extra == "dev"
+Requires-Dist: pytest>=8.0; extra == "dev"
+Provides-Extra: train
+Requires-Dist: accelerate>=1.10; extra == "train"
+Requires-Dist: datasets>=4.0; extra == "train"
+Requires-Dist: peft>=0.17; extra == "train"
+Requires-Dist: trl>=0.23.1; extra == "train"

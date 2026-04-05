@@ -5,6 +5,8 @@ WORKDIR /app
 COPY pyproject.toml /app/pyproject.toml
 COPY opsarena /app/opsarena
 COPY server /app/server
+COPY baselines /app/baselines
+COPY scripts /app/scripts
 COPY configs /app/configs
 COPY data /app/data
 

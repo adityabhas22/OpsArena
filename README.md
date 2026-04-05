@@ -68,6 +68,12 @@ pip install -e ".[dev]"
 
 The `[dev]` extra installs `pytest` and `httpx` for tests and HTTP client usage. Core runtime deps are `openenv-core`, `pydantic`, and `pyyaml` (see `pyproject.toml`).
 
+For GRPO training experiments, install the training extra as well:
+
+```bash
+pip install -e ".[dev,train]"
+```
+
 ### Run tests
 
 ```bash
@@ -100,10 +106,20 @@ docker run -p 8000:8000 opsarena
 ### Quick oracle check
 
 ```bash
-python scripts/run_eval.py
+python -m scripts.run_eval
 ```
 
 Prints JSON summaries for the oracle baseline across all task IDs.
+
+### Refund-only GRPO scaffold
+
+```bash
+python scripts/train_refund_grpo.py \
+  --model Qwen/Qwen3-4B-Instruct-2507 \
+  --output-dir artifacts/refund-grpo
+```
+
+This uses the refund-only wrapper in `opsarena/training/refund_grpo_env.py`, not the full environment action surface. Start here before attempting multi-workflow training.
 
 ## Using the client
 
@@ -116,6 +132,8 @@ Prints JSON summaries for the oracle baseline across all task IDs.
 | [docs/action-space.md](docs/action-space.md) | Typed actions (list queue, open case, query policy, approve, …) |
 | [docs/workflows.md](docs/workflows.md) | Intended workflows: refund/dispute, AP/invoice, KYC, queue triage |
 | [docs/rewards.md](docs/rewards.md) | Objective vs shaping reward, penalties, workflow intuition |
+| [docs/rl-readiness.md](docs/rl-readiness.md) | Training-facing reward semantics, scenario entropy, and validation flow |
+| [docs/grpo-refund-training.md](docs/grpo-refund-training.md) | Refund-only GRPO wrapper, reward function, and training caveats |
 | [docs/production-roadmap.md](docs/production-roadmap.md) | Roadmap and production-oriented notes |
 | [opsarena_blueprint.md](opsarena_blueprint.md) | Full design thesis (POMDP, graders, scenario generation, evaluation) |
 

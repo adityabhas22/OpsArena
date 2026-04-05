@@ -111,6 +111,7 @@ class OpsArenaState(State):
     cases_total: int = 0
     objective_score: float = 0.0
     train_score: float = 0.0
+    benchmark_score: float = 0.0
     current_case_id: str | None = None
     grader_breakdown: dict[str, Any] = Field(default_factory=dict)
 

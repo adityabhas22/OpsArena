@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from openenv.core.env_server.http_server import create_app
 
 try:
@@ -15,7 +17,7 @@ app = create_app(
     RawOpsAction,
     OpsArenaObservation,
     env_name="opsarena",
-    max_concurrent_envs=4,
+    max_concurrent_envs=int(os.getenv("OPSARENA_MAX_CONCURRENT_ENVS", "64")),
 )
 
 

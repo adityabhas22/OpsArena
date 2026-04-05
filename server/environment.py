@@ -26,7 +26,7 @@ class OpsArenaEnvironment(Environment[RawOpsAction, OpsArenaObservation, OpsAren
         task_id: str = "refund_exception",
         **_: Any,
     ) -> OpsArenaObservation:
-        self._state = build_task_state(task_id, seed=seed or 7, episode_id=episode_id)
+        self._state = build_task_state(task_id, seed=7 if seed is None else seed, episode_id=episode_id)
         return render_observation(self._state, message=f"Task {task_id} initialized")
 
     def step(
@@ -40,8 +40,14 @@ class OpsArenaEnvironment(Environment[RawOpsAction, OpsArenaObservation, OpsAren
         typed_action = validate_ops_action(action)
         result = apply_action(self._state, typed_action)
         done = self._is_done()
-        if done:
+        if done and not self._state.metadata.get("episode_scored", False):
             self._state.grader_breakdown = grade_episode(self._state)
+            self._state.benchmark_score = self._state.grader_breakdown.get("score", 0.0)
+            self._state.objective_score += self._state.benchmark_score
+            self._state.train_score += self._state.benchmark_score
+            result.objective_reward += self._state.benchmark_score
+            result.train_reward += self._state.benchmark_score
+            self._state.metadata["episode_scored"] = True
         obs = render_observation(
             self._state,
             success=result.success,
@@ -57,6 +63,9 @@ class OpsArenaEnvironment(Environment[RawOpsAction, OpsArenaObservation, OpsAren
                 "train_reward": result.train_reward,
                 "objective_score": self._state.objective_score,
                 "train_score": self._state.train_score,
+                "benchmark_score": self._state.benchmark_score,
+                "legacy_objective_score": self._state.metadata.get("legacy_objective_score", 0.0),
+                "legacy_train_score": self._state.metadata.get("legacy_train_score", 0.0),
                 "grader_breakdown": self._state.grader_breakdown,
             }
         )
@@ -88,6 +97,7 @@ class OpsArenaEnvironment(Environment[RawOpsAction, OpsArenaObservation, OpsAren
             cases_total=len(self._state.cases),
             objective_score=self._state.objective_score,
             train_score=self._state.train_score,
+            benchmark_score=self._state.benchmark_score,
             current_case_id=self._state.current_case_id,
             grader_breakdown=self._state.grader_breakdown,
         )

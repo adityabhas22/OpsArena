@@ -18,12 +18,18 @@ dev = [
   "httpx>=0.28",
   "pytest>=8.0",
 ]
+train = [
+  "accelerate>=1.10",
+  "datasets>=4.0",
+  "peft>=0.17",
+  "trl>=0.23.1",
+]
 
 [project.scripts]
 server = "server.app:main"
 
 [tool.setuptools.packages.find]
-include = ["opsarena*", "server*"]
+include = ["opsarena*", "server*", "baselines*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

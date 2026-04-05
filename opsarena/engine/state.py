@@ -105,6 +105,7 @@ class WorldState(BaseModel):
     metrics: EpisodeMetrics = Field(default_factory=EpisodeMetrics)
     objective_score: float = 0.0
     train_score: float = 0.0
+    benchmark_score: float = 0.0
     grader_breakdown: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
 

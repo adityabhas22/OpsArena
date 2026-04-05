@@ -73,6 +73,7 @@ def grade_trajectory(state: WorldState) -> float:
         "ofac_report_before_close": 1.0,
         "freeze_on_confirmed_match": 1.0,
         "stop_payment_discipline": 1.0,
+        "invalid_action_discipline": 1.0,
     }
     for case in state.cases.values():
         events = [entry.action_type for entry in audit if entry.case_id == case.case_id]
@@ -134,6 +135,9 @@ def grade_trajectory(state: WorldState) -> float:
             and not any(evt in {"stop_payment", "remove_from_payment_batch"} for evt in events)
         ):
             checks["stop_payment_discipline"] = 0.0
+    if state.metrics.invalid_actions > 0:
+        cases = max(1, len(state.cases))
+        checks["invalid_action_discipline"] = max(0.0, 1.0 - state.metrics.invalid_actions / (cases * 2))
     return sum(checks.values()) / len(checks)
 
 

@@ -2,7 +2,9 @@ task_id: invoice_plus_kyc
 difficulty: medium
 initial_time: 540
 atomic_factors:
-  invoice_error_type: [true_duplicate, tolerance_band]
-  response_latency: [slow]
-  doc_validity: [valid, recently_expired]
-  sla_tightness: [standard]
+  invoice_error_type: [true_duplicate, tolerance_band, missing_receipt, overbilling]
+  response_latency: [fast, slow, vendor_silent]
+  doc_validity: [valid, recently_expired, invalid]
+  sla_tightness: [tight, standard]
+  sanctions_path: [clear, false_positive, confirmed_match]
+  owner_review_path: [clean, correction_required]

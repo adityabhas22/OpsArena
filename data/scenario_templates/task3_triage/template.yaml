@@ -2,7 +2,9 @@ task_id: queue_triage
 difficulty: hard
 initial_time: 600
 atomic_factors:
-  amount_tier: [medium, high]
-  escalation_load: [medium]
-  sla_tightness: [urgent, standard]
+  amount_tier: [low, medium, high]
+  escalation_load: [low, medium, high]
+  sla_tightness: [urgent, standard, staggered]
   fraud_risk: [low, medium, high]
+  queue_shock: [none, arrival_wave, staffing_drop, mixed]
+  compliance_path: [false_positive, confirmed_match]

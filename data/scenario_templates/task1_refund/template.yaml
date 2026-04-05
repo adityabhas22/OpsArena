@@ -2,7 +2,8 @@ task_id: refund_exception
 difficulty: easy
 initial_time: 480
 atomic_factors:
-  amount_tier: [medium]
-  threshold_proximity: [near]
-  fraud_risk: [low, high]
-  sla_tightness: [standard]
+  amount_tier: [low, medium, high]
+  threshold_proximity: [far_below, near_threshold, above_threshold]
+  fraud_risk: [low, medium, high]
+  sla_tightness: [urgent, standard, relaxed]
+  dispute_mode: [chargeback_open, inquiry]

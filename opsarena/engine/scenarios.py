@@ -75,6 +75,24 @@ def _load_template(task_id: TaskId) -> dict:
     return yaml.safe_load(mapping[task_id].read_text())
 
 
+def _choose_factor(template: dict, rng: random.Random, name: str, default):
+    options = template.get("atomic_factors", {}).get(name)
+    if not options:
+        return default
+    return rng.choice(options)
+
+
+def _latency_minutes(label: str, *, fast: int = 15, standard: int = 30, slow: int = 60, silent: int = 120) -> int:
+    return {
+        "fast": fast,
+        "standard": standard,
+        "slow": slow,
+        "vendor_silent": silent,
+        "unresponsive": silent,
+        "responsive": fast,
+    }.get(label, standard)
+
+
 def _base_state(task_id: TaskId, seed: int, episode_id: str | None = None) -> WorldState:
     return WorldState(
         episode_id=episode_id or f"{task_id.value}-{seed}",
@@ -173,7 +191,17 @@ def _rename_refund_bundle(case: CaseState, records: RecordStore, suffix: str) ->
     return renamed_case, renamed_records
 
 
-def _refund_case(rng: random.Random, task_id: TaskId, current_time: int) -> tuple[CaseState, RecordStore]:
+def _refund_case(
+    rng: random.Random,
+    task_id: TaskId,
+    current_time: int,
+    *,
+    amount_tier: str = "medium",
+    threshold_proximity: str = "near_threshold",
+    fraud_risk_label: str | None = None,
+    sla_tightness: str = "standard",
+    dispute_mode: str = "chargeback_open",
+) -> tuple[CaseState, RecordStore]:
     records = RecordStore()
     _add_shared_templates(records)
     records.policies["refund_policy"] = load_policy("refund_policy")
@@ -244,8 +272,36 @@ def _refund_case(rng: random.Random, task_id: TaskId, current_time: int) -> tupl
     records.payments[payment.payment_id] = payment
     records.disputes[dispute.dispute_id] = dispute
 
-    fraud_risk = 0.82 if rng.random() < 0.35 else 0.22
-    flags = ["near-threshold"] if 300 <= 350 <= 500 else []
+    amount_map = {
+        "low": 45.0,
+        "medium": 350.0,
+        "high": 640.0,
+    }
+    threshold_amount_map = {
+        "far_below": 120.0,
+        "near_threshold": 490.0,
+        "above_threshold": 640.0,
+    }
+    amount = threshold_amount_map.get(threshold_proximity, amount_map.get(amount_tier, 350.0))
+    fraud_risk_map = {
+        "low": 0.18,
+        "medium": 0.48,
+        "high": 0.86,
+    }
+    if fraud_risk_label is None:
+        fraud_risk_label = "high" if rng.random() < 0.35 else "low"
+    fraud_risk = fraud_risk_map.get(fraud_risk_label, 0.22)
+    sla_offset = {
+        "urgent": 30,
+        "standard": 60,
+        "relaxed": 90,
+    }.get(sla_tightness, 60)
+
+    flags = []
+    if 300 <= amount <= 520:
+        flags.append("near-threshold")
+    if amount > 500:
+        flags.append("manager-threshold")
     if fraud_risk > 0.7:
         flags.append("velocity_alert")
 
@@ -254,10 +310,10 @@ def _refund_case(rng: random.Random, task_id: TaskId, current_time: int) -> tupl
         case_type=CaseType.REFUND,
         task_id=task_id,
         priority=int(Priority.HIGH),
-        sla_deadline=current_time + 60,
+        sla_deadline=current_time + sla_offset,
         created_at=current_time,
-        amount=350.0,
-        visible_summary="Customer claims refund was not processed for order #1001.",
+        amount=amount,
+        visible_summary="Customer claims refund was not processed for order #1001." if dispute_mode == "chargeback_open" else "Low-dollar pre-dispute inquiry needs an economics-aware decision.",
         visible_flags=flags,
         linked_records=[
             LinkedRecord(record_type=RecordType.ORDER, record_id=order.order_id, title="Order #1001"),
@@ -278,36 +334,51 @@ def _refund_case(rng: random.Random, task_id: TaskId, current_time: int) -> tupl
         active_queue="refund_ops",
         hidden=CaseHiddenState(
             hidden_follow_up_latency_minutes=20,
-            true_dispute_should_accept=fraud_risk > 0.7,
+            true_dispute_should_accept=fraud_risk > 0.7 or amount <= 75,
             true_fraud_risk=fraud_risk,
-            true_downstream_loss=125.0 if fraud_risk > 0.7 else 0.0,
+            true_downstream_loss=round(amount * 0.36, 2) if fraud_risk > 0.7 else 0.0,
         ),
         workflow=RefundWorkflowState(
-            sla_total=60,
+            sla_total=sla_offset,
             refund_threshold=500.0,
-            pre_dispute_type=PreDisputeType.NONE,
+            pre_dispute_type=PreDisputeType.NONE if dispute_mode == "chargeback_open" else PreDisputeType.INQUIRY,
+            pre_dispute_due_at=None if dispute_mode == "chargeback_open" else current_time + max(10, sla_offset // 2),
             dispute_workflow_status=dispute.status,
-            dispute_stage=DisputeStage.CHARGEBACK_OPEN,
+            dispute_stage=DisputeStage.CHARGEBACK_OPEN if dispute_mode == "chargeback_open" else DisputeStage.INQUIRY,
             dispute_resolution=DisputeResolution.PENDING,
             dispute_fee=15.0,
-            chargeback_received_at=current_time - 5,
-            representment_due_at=current_time + 18,
-            chargeback_amount=350.0,
-            merchant_dispute_ratio_30d=0.004 if fraud_risk <= 0.7 else 0.009,
-            merchant_fraud_ratio_30d=0.002 if fraud_risk <= 0.7 else 0.006,
+            chargeback_received_at=current_time - 5 if dispute_mode == "chargeback_open" else None,
+            representment_due_at=current_time + 18 if dispute_mode == "chargeback_open" else None,
+            chargeback_amount=amount,
+            merchant_dispute_ratio_30d=0.004 if fraud_risk <= 0.5 else (0.0065 if fraud_risk <= 0.7 else 0.0105),
+            merchant_fraud_ratio_30d=0.0015 if fraud_risk <= 0.5 else (0.003 if fraud_risk <= 0.7 else 0.0065),
             merchant_negative_balance=fraud_risk > 0.7,
-            merchant_age_days=45 if fraud_risk > 0.7 else 365,
-            merchant_volume_change_7d=-0.35 if fraud_risk > 0.7 else -0.05,
-            avg_fulfillment_days=5 if fraud_risk > 0.7 else 2,
+            merchant_age_days=45 if fraud_risk > 0.7 else (120 if fraud_risk > 0.4 else 365),
+            merchant_volume_change_7d=-0.35 if fraud_risk > 0.7 else (-0.18 if fraud_risk > 0.4 else -0.05),
+            avg_fulfillment_days=6 if fraud_risk > 0.7 else (4 if fraud_risk > 0.4 else 2),
         ),
     )
     case.workflow.recompute_risk_state()
     return case, records
 
 
-def _invoice_case(current_time: int, task_id: TaskId, duplicate: bool, latency_minutes: int) -> tuple[CaseState, RecordStore]:
+def _invoice_case(
+    current_time: int,
+    task_id: TaskId,
+    duplicate: bool,
+    latency_minutes: int,
+    *,
+    error_type: str = "true_duplicate",
+    sla_tightness: str = "standard",
+) -> tuple[CaseState, RecordStore]:
     records = RecordStore()
     records.policies["invoice_policy"] = load_policy("invoice_policy")
+    invoice_total = {
+        "true_duplicate": 12450,
+        "tolerance_band": 12450,
+        "missing_receipt": 9800,
+        "overbilling": 15800,
+    }.get(error_type, 12450)
     invoice = InvoiceRecord(
         invoice_id="inv_2001",
         invoice_number="INV-2001",
@@ -325,18 +396,18 @@ def _invoice_case(current_time: int, task_id: TaskId, duplicate: bool, latency_m
                 sku="pk-tape",
                 quantity=Decimal("100"),
                 unit_price=124,
-                amount=12400,
-                subtotal=12400,
+                amount=invoice_total - 50,
+                subtotal=invoice_total - 50,
             )
         ],
         shipping_cost=ShippingCost(amount_subtotal=0, amount_tax=0, amount_total=0),
-        subtotal=12400,
+        subtotal=invoice_total - 50,
         total_discount=0,
         total_tax=50,
-        total=12450,
-        amount_due=12450,
+        total=invoice_total,
+        amount_due=invoice_total,
         amount_paid=0,
-        amount_remaining=12450,
+        amount_remaining=invoice_total,
         payment_method="ach",
     )
     po = PurchaseOrder(
@@ -348,13 +419,25 @@ def _invoice_case(current_time: int, task_id: TaskId, duplicate: bool, latency_m
         vendor_address="101 Vendor Way",
         currency="USD",
         payment_terms="NET30",
-        total_net_value=12400,
-        total_gross_value=12450,
+        total_net_value=max(5000, invoice_total - 50),
+        total_gross_value=max(5050, invoice_total),
         requested_delivery_date=current_time - 10,
         approval_status="approved",
         approved_by="buyer_1",
         line_items=[],
     )
+    sla_offset = {"tight": 60, "standard": 90}.get(sla_tightness, 90)
+    visible_summary_map = {
+        "true_duplicate": "Invoice INV-2001 flagged as potential duplicate with missing receipt.",
+        "tolerance_band": "Invoice INV-2001 has a small variance that may be within policy tolerance.",
+        "missing_receipt": "Invoice INV-2001 cannot be cleared because the goods receipt is still missing.",
+        "overbilling": "Invoice INV-2001 appears overbilled and may need recovery before payment.",
+    }
+    visible_flags = ["duplicate_check"] if duplicate or error_type == "true_duplicate" else []
+    if error_type == "missing_receipt":
+        visible_flags.append("missing_receipt")
+    if error_type in {"overbilling", "tolerance_band"}:
+        visible_flags.append("variance")
     records.invoices[invoice.invoice_id] = invoice
     records.purchase_orders[po.po_number] = po
     case = CaseState(
@@ -362,11 +445,11 @@ def _invoice_case(current_time: int, task_id: TaskId, duplicate: bool, latency_m
         case_type=CaseType.INVOICE,
         task_id=task_id,
         priority=int(Priority.MEDIUM),
-        sla_deadline=current_time + 90,
+        sla_deadline=current_time + sla_offset,
         created_at=current_time,
-        amount=124.5,
-        visible_summary="Invoice INV-2001 flagged as potential duplicate with missing receipt.",
-        visible_flags=["duplicate_check"],
+        amount=round(invoice_total / 100, 2),
+        visible_summary=visible_summary_map.get(error_type, visible_summary_map["true_duplicate"]),
+        visible_flags=visible_flags,
         linked_records=[
             LinkedRecord(record_type=RecordType.INVOICE, record_id=invoice.invoice_id, title="Invoice INV-2001"),
             LinkedRecord(record_type=RecordType.PURCHASE_ORDER, record_id=po.po_number, title="PO-2001"),
@@ -379,24 +462,34 @@ def _invoice_case(current_time: int, task_id: TaskId, duplicate: bool, latency_m
         policy_id="invoice_policy",
         allowed_escalation_queues=[TargetQueue.SENIOR_OPS, TargetQueue.MANAGER_REVIEW],
         vendor_id="vendor_1",
-        pending_info_fields=["goods_receipt"],
+        pending_info_fields=["goods_receipt"] if error_type == "missing_receipt" else [],
         active_queue="ap_review",
         hidden=CaseHiddenState(
             hidden_response_latency_minutes=latency_minutes,
             hidden_follow_up_latency_minutes=35,
             true_is_duplicate=duplicate,
+            true_variance_within_tolerance=error_type == "tolerance_band",
         ),
         workflow=InvoiceWorkflowState(
-            sla_total=90,
+            sla_total=sla_offset,
             approval_threshold=100.0,
             duplicate_status=DuplicateStatus.SUSPECTED,
             credit_memo_status=CreditMemoStatus.NOT_REQUESTED,
-            credit_memo_amount=24.5,
+            credit_memo_amount=24.5 if error_type in {"overbilling", "tolerance_band"} else None,
             approval_status=ApprovalStatus.NOT_REQUESTED,
             secondary_approval_required=True,
             approval_expected_outcome=ApprovalDecision.DENIED if duplicate else ApprovalDecision.APPROVED,
         ),
     )
+    if error_type == "tolerance_band":
+        case.workflow.match_status = MatchStatus.VARIANCE
+        case.workflow.variance_amount = 2.5
+    elif error_type == "overbilling":
+        case.workflow.match_status = MatchStatus.VARIANCE
+        case.workflow.variance_amount = 34.5
+        case.hidden.true_recoverable_amount = 34.5
+    elif error_type == "missing_receipt":
+        case.workflow.match_status = MatchStatus.MISSING_RECEIPT
     return case, records
 
 
@@ -406,11 +499,11 @@ def _kyc_case(
     doc_valid: bool,
     latency_minutes: int,
     *,
-    sanctions_false_positive: bool = False,
-    sanctions_match: bool = False,
+    sanctions_path: str = "false_positive",
     edd_required: bool = False,
     beneficial_owner_issue: bool = False,
     ofac_report_required: bool = False,
+    sla_tightness: str = "standard",
 ) -> tuple[CaseState, RecordStore]:
     records = RecordStore()
     records.policies["kyc_policy"] = load_policy("kyc_policy")
@@ -453,15 +546,18 @@ def _kyc_case(
     )
     records.customers[customer.customer_id] = customer
     records.kyc_verifications[verification.session_id] = verification
+    sanctions_false_positive = sanctions_path == "false_positive"
+    sanctions_match = sanctions_path == "confirmed_match"
+    sla_offset = {"tight": 90, "standard": 120}.get(sla_tightness, 120)
     case = CaseState(
         case_id="case_kyc_1",
         case_type=CaseType.KYC,
         task_id=task_id,
         priority=int(Priority.HIGH),
-        sla_deadline=current_time + 120,
+        sla_deadline=current_time + sla_offset,
         created_at=current_time,
         amount=2400.0,
-        visible_summary="Merchant payout blocked pending KYC and compliance review.",
+        visible_summary="Merchant payout blocked pending KYC and compliance review." if sanctions_path != "confirmed_match" else "Merchant flagged by sanctions screening with payout controls required.",
         visible_flags=["payout_hold"],
         linked_records=[
             LinkedRecord(record_type=RecordType.CUSTOMER, record_id=customer.customer_id, title="Merchant profile"),
@@ -490,7 +586,7 @@ def _kyc_case(
             true_ofac_report_required=ofac_report_required,
         ),
         workflow=KYCWorkflowState(
-            sla_total=120,
+            sla_total=sla_offset,
             verification_status=verification.status,
             requirements_due=verification.requirements_currently_due.copy(),
             payout_hold=True,
@@ -513,23 +609,42 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
     current_time = int(template["initial_time"])
 
     if task_id == TaskId.REFUND_EXCEPTION:
-        case, records = _refund_case(rng, task_id, current_time)
+        case, records = _refund_case(
+            rng,
+            task_id,
+            current_time,
+            amount_tier=_choose_factor(template, rng, "amount_tier", "medium"),
+            threshold_proximity=_choose_factor(template, rng, "threshold_proximity", "near_threshold"),
+            fraud_risk_label=_choose_factor(template, rng, "fraud_risk", "low"),
+            sla_tightness=_choose_factor(template, rng, "sla_tightness", "standard"),
+            dispute_mode=_choose_factor(template, rng, "dispute_mode", "chargeback_open"),
+        )
         state.records = records
         state.cases[case.case_id] = case
         state.queue_order = [case.case_id]
         state.metadata["max_steps"] = 20
     elif task_id == TaskId.INVOICE_PLUS_KYC:
+        response_latency = _choose_factor(template, rng, "response_latency", "slow")
+        invoice_error_type = _choose_factor(template, rng, "invoice_error_type", "true_duplicate")
+        invoice_sla = _choose_factor(template, rng, "sla_tightness", "standard")
         invoice_case, invoice_records = _invoice_case(
-            current_time, task_id, duplicate=bool(rng.randint(0, 1)), latency_minutes=30
+            current_time,
+            task_id,
+            duplicate=invoice_error_type == "true_duplicate",
+            latency_minutes=_latency_minutes(response_latency, fast=12, standard=30, slow=55, silent=120),
+            error_type=invoice_error_type,
+            sla_tightness=invoice_sla,
         )
         kyc_case, kyc_records = _kyc_case(
             current_time,
             task_id,
             doc_valid=True,
-            latency_minutes=45,
-            sanctions_false_positive=True,
+            latency_minutes=_latency_minutes(response_latency, fast=15, standard=35, slow=45, silent=90),
+            sanctions_path="false_positive",
             edd_required=True,
             beneficial_owner_issue=True,
+            ofac_report_required=False,
+            sla_tightness=invoice_sla,
         )
         state.records = RecordStore(
             customers={**invoice_records.customers, **kyc_records.customers},
@@ -557,10 +672,22 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
         state.queue_order = [invoice_case.case_id, kyc_case.case_id]
         state.metadata["max_steps"] = 35
     elif task_id == TaskId.QUEUE_TRIAGE:
+        triage_fraud = _choose_factor(template, rng, "fraud_risk", "medium")
+        triage_sla = _choose_factor(template, rng, "sla_tightness", "standard")
+        queue_shock = _choose_factor(template, rng, "queue_shock", "mixed")
         triage_cases: list[CaseState] = []
         combined = RecordStore()
         for idx in range(2):
-            refund_case, records = _refund_case(rng, task_id, current_time + idx)
+            refund_case, records = _refund_case(
+                rng,
+                task_id,
+                current_time + idx,
+                amount_tier=_choose_factor(template, rng, "amount_tier", "medium"),
+                threshold_proximity="near_threshold" if idx == 0 else "far_below",
+                fraud_risk_label=triage_fraud if idx == 0 else "low",
+                sla_tightness="urgent" if idx == 0 else triage_sla,
+                dispute_mode="chargeback_open" if idx == 0 else "inquiry",
+            )
             refund_case.case_id = f"case_refund_{idx + 1}"
             refund_case.priority = int(Priority.CRITICAL if idx == 0 else Priority.HIGH)
             refund_case.sla_deadline = current_time + (25 if idx == 0 else 45)
@@ -602,6 +729,8 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
                 task_id,
                 duplicate=idx == 0,
                 latency_minutes=20 if idx == 0 else 60,
+                error_type="overbilling" if idx == 0 else "missing_receipt",
+                sla_tightness="tight" if idx == 0 else "standard",
             )
             invoice_case.case_id = f"case_invoice_{idx + 1}"
             invoice_case.priority = int(Priority.HIGH if idx == 0 else Priority.MEDIUM)
@@ -631,9 +760,10 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
             task_id,
             doc_valid=True,
             latency_minutes=25,
-            sanctions_match=True,
+            sanctions_path="confirmed_match",
             edd_required=True,
             ofac_report_required=True,
+            sla_tightness="tight",
         )
         kyc_case.case_id = "case_kyc_triage"
         kyc_case.priority = int(Priority.CRITICAL)
@@ -676,35 +806,47 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
                 "active_queue": "refund_ops",
             }
         )
-        state.scheduled_events.append(
-            ArrivalWaveEvent(
-                at_time=current_time + 8,
-                wave_id="midshift_refund_spike",
-                incoming_cases=[arrival_case],
-                record_bundle=ArrivalWaveRecordBundle(
-                    orders=arrival_records.orders,
-                    customers=arrival_records.customers,
-                    disputes=arrival_records.disputes,
-                    policies=arrival_records.policies,
-                    message_templates=arrival_records.message_templates,
-                    shipping=arrival_records.shipping,
-                    payments=arrival_records.payments,
-                ),
+        if queue_shock in {"arrival_wave", "mixed"}:
+            state.scheduled_events.append(
+                ArrivalWaveEvent(
+                    at_time=current_time + 8,
+                    wave_id="midshift_refund_spike",
+                    incoming_cases=[arrival_case],
+                    record_bundle=ArrivalWaveRecordBundle(
+                        orders=arrival_records.orders,
+                        customers=arrival_records.customers,
+                        disputes=arrival_records.disputes,
+                        policies=arrival_records.policies,
+                        message_templates=arrival_records.message_templates,
+                        shipping=arrival_records.shipping,
+                        payments=arrival_records.payments,
+                    ),
+                )
             )
-        )
-        state.scheduled_events.append(
-            StaffingDropEvent(
-                at_time=current_time + 18,
-                capacity_delta=1,
-                affected_owners=["analyst_2"],
+        if queue_shock in {"staffing_drop", "mixed"}:
+            state.scheduled_events.append(
+                StaffingDropEvent(
+                    at_time=current_time + 18,
+                    capacity_delta=1,
+                    affected_owners=["analyst_2"],
+                )
             )
-        )
         state.scheduled_events.sort(key=lambda event: event.at_time)
 
     elif task_id == TaskId.AP_PAYMENT_RUN:
+        vendor_responsiveness = _choose_factor(template, rng, "vendor_responsiveness", "responsive")
+        response_minutes = _latency_minutes(vendor_responsiveness, fast=20, standard=35, slow=55, silent=120)
+        batch_timing = _choose_factor(template, rng, "payment_batch_timing", "pre_batch")
+        recovery_path = _choose_factor(template, rng, "recovery_path", "credit_memo")
+        stop_payment_success = _choose_factor(template, rng, "stop_payment_success", "mixed")
         # Case 1: Overpayment with scheduled payment batch — needs batch removal + vendor recovery
         case1, records1 = _invoice_case(
-            current_time, task_id, duplicate=False, latency_minutes=25,
+            current_time,
+            task_id,
+            duplicate=False,
+            latency_minutes=response_minutes,
+            error_type="overbilling",
+            sla_tightness=_choose_factor(template, rng, "sla_tightness", "standard"),
         )
         case1.case_id = "case_ap_overpayment"
         case1.priority = int(Priority.HIGH)
@@ -719,13 +861,22 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
         case1.workflow.payment_batch_status = PaymentBatchStatus.SCHEDULED
         case1.workflow.write_off_threshold = 15.0
         case1.hidden.true_variance_within_tolerance = False
-        case1.hidden.true_vendor_will_respond = True
-        case1.hidden.true_vendor_response_minutes = 25
+        case1.hidden.true_vendor_will_respond = vendor_responsiveness != "unresponsive"
+        case1.hidden.true_vendor_response_minutes = response_minutes
         case1.hidden.true_recoverable_amount = 24.5
+        if batch_timing == "in_batch":
+            case1.workflow.payment_batch_status = PaymentBatchStatus.IN_PROGRESS
+        elif batch_timing == "post_batch":
+            case1.workflow.payment_batch_status = PaymentBatchStatus.COMPLETED
 
         # Case 2: Post-batch stop payment needed — duplicate detected after batch executed
         case2, records2 = _invoice_case(
-            current_time + 1, task_id, duplicate=True, latency_minutes=30,
+            current_time + 1,
+            task_id,
+            duplicate=True,
+            latency_minutes=response_minutes,
+            error_type="true_duplicate",
+            sla_tightness="tight",
         )
         case2.case_id = "case_ap_stop_payment"
         case2.priority = int(Priority.CRITICAL)
@@ -737,11 +888,16 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
         case2.workflow.payment_batch_id = "batch_002"
         case2.workflow.payment_batch_status = PaymentBatchStatus.COMPLETED
         case2.workflow.stop_payment_window_until = current_time + 35
-        case2.hidden.true_stop_payment_success = bool(rng.randint(0, 1))
+        case2.hidden.true_stop_payment_success = stop_payment_success == "likely" or bool(rng.randint(0, 1))
 
         # Case 3: Small balance write-off — vendor unresponsive, tiny variance
         case3, records3 = _invoice_case(
-            current_time + 2, task_id, duplicate=False, latency_minutes=60,
+            current_time + 2,
+            task_id,
+            duplicate=False,
+            latency_minutes=response_minutes,
+            error_type="tolerance_band" if recovery_path == "write_off" else "overbilling",
+            sla_tightness="standard",
         )
         case3.case_id = "case_ap_write_off"
         case3.priority = int(Priority.LOW)
@@ -754,8 +910,8 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
         case3.workflow.tolerance_percent = 3.0
         case3.workflow.write_off_threshold = 25.0
         case3.hidden.true_variance_within_tolerance = False
-        case3.hidden.true_vendor_will_respond = False
-        case3.hidden.true_recoverable_amount = 0.0
+        case3.hidden.true_vendor_will_respond = vendor_responsiveness == "responsive" and recovery_path != "write_off"
+        case3.hidden.true_recoverable_amount = 8.5 if recovery_path != "write_off" else 0.0
 
         combined = RecordStore(
             invoices={**records1.invoices, **records2.invoices, **records3.invoices},

@@ -12,3 +12,9 @@ def _run():
 
 def test_replay_is_deterministic_for_same_seed_and_actions():
     assert _run() == _run()
+
+
+def test_seed_zero_is_preserved_instead_of_falling_back():
+    env = OpsArenaEnvironment()
+    env.reset(task_id="refund_exception", seed=0, episode_id="ep-zero")
+    assert env.state.scenario_seed == 0

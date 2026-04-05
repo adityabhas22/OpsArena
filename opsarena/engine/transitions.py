@@ -32,6 +32,8 @@ def _append_audit(state: WorldState, case_id: str | None, action_type: str, mess
 def apply_action(state: WorldState, action: OpsAction) -> TransitionResult:
     state.step_count += 1
     state.metrics.tool_calls += 1
+    state.metadata.setdefault("legacy_objective_score", 0.0)
+    state.metadata.setdefault("legacy_train_score", 0.0)
 
     target_case = None
     prev_case = None
@@ -88,7 +90,7 @@ def apply_action(state: WorldState, action: OpsAction) -> TransitionResult:
                 prev_queue=prev_queue,
             )
 
-        objective_reward = reward_breakdown.objective_total
+        legacy_objective_reward = reward_breakdown.objective_total
         if state.task_id == TaskId.QUEUE_TRIAGE and all(item.status == "closed" for item in state.cases.values()):
             queue_reward = compute_queue_reward(
                 queue=state.queue_state(),
@@ -97,9 +99,11 @@ def apply_action(state: WorldState, action: OpsAction) -> TransitionResult:
                 resolved_cases=list(state.cases.values()),
                 remaining_cases=[],
             )
-            objective_reward += queue_reward["total"]
-        train_reward = objective_reward + shaping_reward
-        state.objective_score += objective_reward
+            legacy_objective_reward += queue_reward["total"]
+        state.metadata["legacy_objective_score"] += legacy_objective_reward
+        state.metadata["legacy_train_score"] += legacy_objective_reward + shaping_reward
+        objective_reward = 0.0
+        train_reward = shaping_reward
         state.train_score += train_reward
         state.last_action_result = result.message
         _append_audit(state, case.case_id if case else None, action.action_type, result.message)
@@ -110,13 +114,14 @@ def apply_action(state: WorldState, action: OpsAction) -> TransitionResult:
         state.metrics.invalid_actions += 1
         message = str(exc)
         _append_audit(state, getattr(action, "case_id", None), action.action_type, message, success=False)
-        state.objective_score += -2.0
-        state.train_score += -2.0
+        state.metadata["legacy_objective_score"] += -2.0
+        state.metadata["legacy_train_score"] += -2.0
+        state.train_score += -0.05
         state.last_action_result = message
         return TransitionResult(
             success=False,
             message=message.replace("_", " "),
-            objective_reward=-2.0,
-            train_reward=-2.0,
+            objective_reward=0.0,
+            train_reward=-0.05,
             error_code="invalid_action",
         )
