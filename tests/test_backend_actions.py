@@ -1,4 +1,5 @@
 from server.environment import OpsArenaEnvironment
+from opsarena.domain.workflows.invoice import InvoiceWorkflowState
 from opsarena.enums import MatchStatus, ReasonCode, TargetQueue, VerificationDecision
 from opsarena.models import (
     AcceptDisputeAction,
@@ -44,7 +45,7 @@ def test_route_and_pause_resume_sla_updates_case_workflow():
     paused = env.step(PauseSLAAction(case_id="case_refund_1", reason_code=ReasonCode.AWAITING_RESPONSE))
     assert paused.case_detail is not None
     assert paused.case_detail.workflow_metadata["sla_pause_reason"] == "awaiting_response"
-    paused_at = env._state.cases["case_refund_1"].workflow_data["sla_paused_at"]
+    paused_at = env._state.cases["case_refund_1"].sla_paused_at
 
     env.step(AdvanceClockAction(minutes=15))
     expected_extension = env._state.current_time - paused_at
@@ -196,7 +197,7 @@ def test_credit_memo_and_secondary_approval_workflow_adds_records():
     assert requested.case_detail is not None
     assert requested.case_detail.workflow_metadata["credit_memo_status"] == "requested"
 
-    env.step(AdvanceClockAction(minutes=env._state.cases["case_invoice_2"].hidden_response_latency_minutes or 30))
+    env.step(AdvanceClockAction(minutes=env._state.cases["case_invoice_2"].hidden.hidden_response_latency_minutes or 30))
     credit_case = env._state.cases["case_invoice_2"]
     credit_memo_id = next(record.record_id for record in credit_case.linked_records if record.record_type.value == "credit_memo")
     assert env._state.records.credit_memos[credit_memo_id].amount == 1250
@@ -211,8 +212,9 @@ def test_credit_memo_and_secondary_approval_workflow_adds_records():
     assert sent.case_detail.workflow_metadata["approval_status"] == "pending_secondary"
 
     env.step(AdvanceClockAction(minutes=15))
-    approved = env._state.cases["case_invoice_2"].workflow_data["approval_status"]
-    assert approved == "approved"
+    workflow = env._state.cases["case_invoice_2"].workflow
+    assert isinstance(workflow, InvoiceWorkflowState)
+    assert workflow.approval_status.value == "approved"
 
     env.step(ReleasePaymentHoldAction(case_id="case_invoice_2"))
     final = env.step(ApproveAction(case_id="case_invoice_2"))

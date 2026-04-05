@@ -1,3 +1,5 @@
+from opsarena.domain.workflows.invoice import InvoiceWorkflowState
+from opsarena.domain.workflows.refund import DisputeStage, RefundWorkflowState
 from opsarena.engine.scenarios import build_task_state
 
 
@@ -16,5 +18,9 @@ def test_medium_task_contains_invoice_and_kyc_cases():
 def test_queue_triage_seed_contains_richer_workflow_metadata():
     state = build_task_state("queue_triage", seed=7)
     assert state.metadata["claim_capacity"] == 2
-    assert state.cases["case_refund_2"].workflow_data["dispute_stage"] == "inquiry"
-    assert state.cases["case_invoice_1"].workflow_data["match_status"] == "variance"
+    refund_workflow = state.cases["case_refund_2"].workflow
+    invoice_workflow = state.cases["case_invoice_1"].workflow
+    assert isinstance(refund_workflow, RefundWorkflowState)
+    assert isinstance(invoice_workflow, InvoiceWorkflowState)
+    assert refund_workflow.dispute_stage == DisputeStage.INQUIRY
+    assert invoice_workflow.match_status.value == "variance"

@@ -23,9 +23,20 @@ from opsarena.documents import (
     ShippingCost,
     ShippingRecord,
 )
+from opsarena.domain.core import LinkedRecord
+from opsarena.domain.hidden import CaseHiddenState
+from opsarena.domain.workflows.invoice import (
+    ApprovalDecision,
+    ApprovalStatus,
+    CreditMemoStatus,
+    DuplicateStatus,
+    InvoiceWorkflowState,
+)
+from opsarena.domain.workflows.kyc import KYCStage, KYCWorkflowState
+from opsarena.domain.workflows.refund import DisputeResolution, DisputeStage, RefundWorkflowState
 from opsarena.engine.policies import load_policy
-from opsarena.engine.state import CaseState, LinkedRecord, RecordStore, WorldState
-from opsarena.enums import CaseType, Priority, RecordType, Resolution, TargetQueue, TaskId
+from opsarena.engine.state import CaseState, RecordStore, WorldState
+from opsarena.enums import CaseType, MatchStatus, Priority, RecordType, TargetQueue, TaskId
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -184,23 +195,21 @@ def _refund_case(rng: random.Random, task_id: TaskId, current_time: int) -> tupl
         allowed_escalation_queues=[TargetQueue.MANAGER_REVIEW, TargetQueue.FRAUD_TEAM],
         customer_id=customer.customer_id,
         requires_customer_notification=True,
-        true_fraud_risk=fraud_risk,
-        true_downstream_loss=125.0 if fraud_risk > 0.7 else 0.0,
-        hidden_follow_up_latency_minutes=20,
-        workflow_data={
-            "sla_total": 60,
-            "refund_threshold": 500.0,
-            "active_queue": "refund_ops",
-            "refund_execution_state": "not_started",
-            "dispute_workflow_status": dispute.status,
-            "dispute_evidence_fields": [],
-            "dispute_stage": "chargeback_open",
-            "dispute_resolution": "pending",
-            "dispute_fee": 15.0,
-            "dispute_should_accept": fraud_risk > 0.7,
-            "approval_status": "not_requested",
-            "secondary_approval_required": False,
-        },
+        active_queue="refund_ops",
+        hidden=CaseHiddenState(
+            hidden_follow_up_latency_minutes=20,
+            true_fraud_risk=fraud_risk,
+            true_downstream_loss=125.0 if fraud_risk > 0.7 else 0.0,
+        ),
+        workflow=RefundWorkflowState(
+            sla_total=60,
+            refund_threshold=500.0,
+            dispute_workflow_status=dispute.status,
+            dispute_stage=DisputeStage.CHARGEBACK_OPEN,
+            dispute_resolution=DisputeResolution.PENDING,
+            dispute_fee=15.0,
+            dispute_should_accept=fraud_risk > 0.7,
+        ),
     )
     return case, records
 
@@ -279,23 +288,23 @@ def _invoice_case(current_time: int, task_id: TaskId, duplicate: bool, latency_m
         policy_id="invoice_policy",
         allowed_escalation_queues=[TargetQueue.SENIOR_OPS, TargetQueue.MANAGER_REVIEW],
         vendor_id="vendor_1",
-        true_is_duplicate=duplicate,
-        hidden_response_latency_minutes=latency_minutes,
-        hidden_follow_up_latency_minutes=35,
         pending_info_fields=["goods_receipt"],
-        workflow_data={
-            "sla_total": 90,
-            "approval_threshold": 100.0,
-            "active_queue": "ap_review",
-            "match_status": "pending",
-            "payment_hold": False,
-            "duplicate_status": "suspected",
-            "credit_memo_status": "not_requested",
-            "credit_memo_amount": 24.5,
-            "approval_status": "not_requested",
-            "secondary_approval_required": True,
-            "approval_expected_outcome": "denied" if duplicate else "approved",
-        },
+        active_queue="ap_review",
+        hidden=CaseHiddenState(
+            hidden_response_latency_minutes=latency_minutes,
+            hidden_follow_up_latency_minutes=35,
+            true_is_duplicate=duplicate,
+        ),
+        workflow=InvoiceWorkflowState(
+            sla_total=90,
+            approval_threshold=100.0,
+            duplicate_status=DuplicateStatus.SUSPECTED,
+            credit_memo_status=CreditMemoStatus.NOT_REQUESTED,
+            credit_memo_amount=24.5,
+            approval_status=ApprovalStatus.NOT_REQUESTED,
+            secondary_approval_required=True,
+            approval_expected_outcome=ApprovalDecision.DENIED if duplicate else ApprovalDecision.APPROVED,
+        ),
     )
     return case, records
 
@@ -346,18 +355,20 @@ def _kyc_case(current_time: int, task_id: TaskId, doc_valid: bool, latency_minut
         allowed_escalation_queues=[TargetQueue.COMPLIANCE, TargetQueue.SENIOR_OPS],
         customer_id=customer.customer_id,
         pending_info_fields=["individual.verification.document"],
-        hidden_required_documents=["individual.verification.document"],
-        hidden_response_latency_minutes=latency_minutes,
-        hidden_follow_up_latency_minutes=40,
-        true_doc_valid=doc_valid,
-        workflow_data={
-            "sla_total": 120,
-            "active_queue": "kyc_review",
-            "verification_status": verification.status,
-            "requirements_due": verification.requirements_currently_due.copy(),
-            "payout_hold": True,
-            "kyc_stage": "current_due",
-        },
+        active_queue="kyc_review",
+        hidden=CaseHiddenState(
+            hidden_required_documents=["individual.verification.document"],
+            hidden_response_latency_minutes=latency_minutes,
+            hidden_follow_up_latency_minutes=40,
+            true_doc_valid=doc_valid,
+        ),
+        workflow=KYCWorkflowState(
+            sla_total=120,
+            verification_status=verification.status,
+            requirements_due=verification.requirements_currently_due.copy(),
+            payout_hold=True,
+            kyc_stage=KYCStage.CURRENT_DUE,
+        ),
     )
     return case, records
 
@@ -417,9 +428,9 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
             if idx == 1:
                 refund_case.amount = 45.0
                 refund_case.visible_summary = "Low-dollar inquiry with weak recovery economics"
-                refund_case.workflow_data["dispute_stage"] = "inquiry"
-                refund_case.workflow_data["dispute_should_accept"] = True
-                refund_case.workflow_data["dispute_fee"] = 15.0
+                refund_case.workflow.dispute_stage = DisputeStage.INQUIRY
+                refund_case.workflow.dispute_should_accept = True
+                refund_case.workflow.dispute_fee = 15.0
             triage_cases.append(refund_case)
             combined.customers.update(records.customers)
             combined.orders.update(records.orders)
@@ -441,8 +452,8 @@ def build_task_state(task_id: TaskId | str, seed: int = 7, episode_id: str | Non
             invoice_case.visible_summary = f"Invoice exception {idx + 1}"
             if idx == 0:
                 invoice_case.visible_summary = "Invoice variance likely needs credit memo and secondary approval"
-                invoice_case.workflow_data["match_status"] = "variance"
-                invoice_case.workflow_data["variance_amount"] = 24.5
+                invoice_case.workflow.match_status = MatchStatus.VARIANCE
+                invoice_case.workflow.variance_amount = 24.5
             triage_cases.append(invoice_case)
             combined.invoices.update(records.invoices)
             combined.purchase_orders.update(records.purchase_orders)

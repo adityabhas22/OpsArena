@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from math import comb
 
+from opsarena.domain.workflows.invoice import CreditMemoStatus, InvoiceWorkflowState
+from opsarena.domain.workflows.kyc import KYCWorkflowState
+from opsarena.domain.workflows.refund import DisputeResolution, RefundWorkflowState
 from opsarena.engine.state import WorldState
 from opsarena.enums import CaseType, Resolution, TaskId
 
@@ -16,17 +19,23 @@ def _hard_gate(state: WorldState) -> float | None:
 
 def _case_outcome_score(case) -> float:
     if case.case_type == CaseType.REFUND:
-        if case.workflow_data.get("dispute_resolution") == "accepted":
-            return 1.0 if case.workflow_data.get("dispute_should_accept") and case.status == "closed" else 0.25
-        expected = Resolution.REJECTED if case.true_fraud_risk > 0.7 else Resolution.APPROVED
+        workflow = case.workflow
+        assert isinstance(workflow, RefundWorkflowState)
+        if workflow.dispute_resolution == DisputeResolution.ACCEPTED:
+            return 1.0 if workflow.dispute_should_accept and case.status == "closed" else 0.25
+        expected = Resolution.REJECTED if case.hidden.true_fraud_risk > 0.7 else Resolution.APPROVED
     elif case.case_type == CaseType.INVOICE:
-        if case.workflow_data.get("credit_memo_status") in {"received", "applied"}:
+        workflow = case.workflow
+        assert isinstance(workflow, InvoiceWorkflowState)
+        if workflow.credit_memo_status in {CreditMemoStatus.RECEIVED, CreditMemoStatus.APPLIED}:
             return 1.0 if case.resolution == Resolution.APPROVED and case.status == "closed" else 0.0
-        expected = Resolution.REJECTED if case.true_is_duplicate else Resolution.APPROVED
+        expected = Resolution.REJECTED if case.hidden.true_is_duplicate else Resolution.APPROVED
     else:
-        if not case.true_doc_valid:
+        workflow = case.workflow
+        assert isinstance(workflow, KYCWorkflowState)
+        if not case.hidden.true_doc_valid:
             expected = Resolution.REJECTED
-        elif not case.kyc_complete:
+        elif not workflow.kyc_complete:
             expected = Resolution.DEFERRED
         else:
             expected = Resolution.APPROVED
@@ -64,7 +73,8 @@ def grade_trajectory(state: WorldState) -> float:
         if case.requested_info_fields and len(case.requested_info_fields) > 2:
             checks["request_info_limit"] = 0.0
         if (
-            case.workflow_data.get("secondary_approval_required")
+            isinstance(case.workflow, InvoiceWorkflowState)
+            and case.workflow.secondary_approval_required
             and case.resolution == Resolution.APPROVED
             and "send_for_secondary_approval" not in events
         ):

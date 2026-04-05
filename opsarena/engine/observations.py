@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from opsarena.engine.action_availability import available_actions
 from opsarena.engine.state import AuditEntry, CaseState, WorldState
-from opsarena.enums import Priority, RecordType
+from opsarena.enums import RecordType
 from opsarena.models import (
     ActionResult,
     AuditEntryView,
@@ -32,36 +33,14 @@ def _priority_label(priority: int) -> str:
 
 
 def _workflow_metadata(case: CaseState) -> dict[str, Any]:
-    visible_keys = {
-        "active_queue",
-        "route_reason",
-        "route_history",
-        "sla_paused_at",
-        "sla_pause_reason",
-        "refund_execution_state",
-        "refunded_amount",
-        "dispute_stage",
-        "dispute_resolution",
-        "dispute_fee",
-        "dispute_workflow_status",
-        "dispute_evidence_fields",
-        "match_status",
-        "duplicate_status",
-        "variance_amount",
-        "payment_hold",
-        "payment_hold_reason",
-        "credit_memo_status",
-        "credit_memo_amount",
-        "approval_status",
-        "approval_reason",
-        "approval_assignee",
-        "approval_chain",
-        "verification_status",
-        "requirements_due",
-        "payout_hold",
-        "kyc_stage",
+    data = {
+        "active_queue": case.active_queue,
+        "route_reason": case.route_reason,
+        "route_history": [entry.model_dump() for entry in case.route_history],
+        "sla_paused_at": case.sla_paused_at,
+        "sla_pause_reason": case.sla_pause_reason,
+        **case.workflow.public_metadata(),
     }
-    data = {key: value for key, value in case.workflow_data.items() if key in visible_keys}
     if case.pending_info_fields:
         data["pending_info_fields"] = case.pending_info_fields
     if case.claimed_by:
@@ -227,43 +206,7 @@ def render_observation(
         escalation_slots_remaining=max(0, esc_capacity - esc_load),
         system_message=message,
         error=None if success else message,
-        available_actions=[
-            "list_queue",
-            "open_case",
-            "view_record",
-            "query_policy",
-            "search_cases",
-            "inspect_audit",
-            "approve",
-            "reject",
-            "escalate",
-            "defer",
-            "request_info",
-            "assign",
-            "claim_case",
-            "return_to_queue",
-            "route_case",
-            "send_message",
-            "log_internal_note",
-            "prioritize",
-            "batch_reorder",
-            "schedule_follow_up",
-            "pause_sla",
-            "resume_sla",
-            "execute_refund",
-            "accept_dispute",
-            "submit_dispute_evidence",
-            "record_three_way_match",
-            "place_payment_hold",
-            "release_payment_hold",
-            "request_credit_memo",
-            "send_for_secondary_approval",
-            "review_kyc",
-            "trigger_reverification",
-            "advance_clock",
-            "close_case",
-            "reopen_case",
-        ],
+        available_actions=available_actions(state),
         metadata={
             "action_result": ActionResult(
                 success=success,

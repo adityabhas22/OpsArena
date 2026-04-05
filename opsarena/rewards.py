@@ -106,6 +106,23 @@ class EpisodeMetrics:
     compliance_violations: int = 0
 
 
+def _case_attr(case: Any, attr: str, default: Any = None) -> Any:
+    if hasattr(case, attr):
+        return getattr(case, attr)
+    hidden = getattr(case, "hidden", None)
+    if hidden is not None and hasattr(hidden, attr):
+        return getattr(hidden, attr)
+    workflow = getattr(case, "workflow", None)
+    if workflow is not None and hasattr(workflow, attr):
+        return getattr(workflow, attr)
+    return default
+
+
+def _workflow_value(case: Any, attr: str, default: Any = None) -> Any:
+    value = _case_attr(case, attr, default)
+    return getattr(value, "value", value)
+
+
 # ============================================================================
 # SECTION 1: PER-WORKFLOW REWARD FUNCTIONS
 # ============================================================================
@@ -179,14 +196,15 @@ def compute_refund_reward(
     breakdown: dict[str, float] = {}
 
     # --- Decision reward ---
-    is_fraud = case.true_fraud_risk > 0.5  # threshold for "actually fraudulent"
+    true_fraud_risk = float(_case_attr(case, "true_fraud_risk", 0.0))
+    is_fraud = true_fraud_risk > 0.5  # threshold for "actually fraudulent"
 
     if case.resolution == Resolution.APPROVED:
         if not is_fraud:
             # Correct approval: retain customer
             base = p.correct_approval_base + p.amount_multiplier_approval * case.amount
             # Scale by customer quality (proxy: inverse of fraud risk)
-            retention_factor = 1.0 + 0.5 * (1.0 - case.true_fraud_risk)
+            retention_factor = 1.0 + 0.5 * (1.0 - true_fraud_risk)
             breakdown["decision"] = base * retention_factor
         else:
             # False negative: approved fraud -> chargeback
@@ -205,7 +223,7 @@ def compute_refund_reward(
         else:
             # False positive: rejected legitimate customer
             # Cost scales with customer value and how far from fraud they were
-            innocence_factor = 1.0 + 2.0 * (0.5 - case.true_fraud_risk)
+            innocence_factor = 1.0 + 2.0 * (0.5 - true_fraud_risk)
             breakdown["decision"] = p.false_positive_cltv_loss * innocence_factor
 
     elif case.resolution == Resolution.ESCALATED:
@@ -300,7 +318,7 @@ def compute_invoice_reward(
     p = params or InvoiceRewardParams()
     breakdown: dict[str, float] = {}
 
-    is_duplicate = case.true_is_duplicate
+    is_duplicate = bool(_case_attr(case, "true_is_duplicate", False))
 
     # --- Match quality ---
     if case.resolution == Resolution.APPROVED:
@@ -434,9 +452,11 @@ def compute_kyc_reward(
 
     # --- Compliance ---
     if case.resolution == Resolution.APPROVED:
-        if case.kyc_complete and case.true_doc_valid:
+        kyc_complete = bool(_case_attr(case, "kyc_complete", False))
+        true_doc_valid = bool(_case_attr(case, "true_doc_valid", True))
+        if kyc_complete and true_doc_valid:
             breakdown["compliance"] = p.approved_with_complete_kyc
-        elif not case.kyc_complete:
+        elif not kyc_complete:
             # CATASTROPHIC: approved without complete KYC
             breakdown["compliance"] = p.approved_incomplete_kyc * tier_mult
         else:
@@ -447,7 +467,7 @@ def compute_kyc_reward(
     elif case.resolution == Resolution.ESCALATED:
         breakdown["compliance"] = 1.0 if case.escalation_justified else -2.0
     elif case.resolution == Resolution.REJECTED:
-        if not case.true_doc_valid:
+        if not bool(_case_attr(case, "true_doc_valid", True)):
             breakdown["compliance"] = 5.0  # correct rejection of bad docs
         else:
             breakdown["compliance"] = -8.0  # wrongly rejected valid applicant
@@ -1025,7 +1045,7 @@ def compute_queue_reward(
 
     # --- Risk concentration (Herfindahl-like index) ---
     if remaining_cases:
-        risk_scores = [c.true_fraud_risk + (0.3 if c.priority <= 2 else 0.0)
+        risk_scores = [float(_case_attr(c, "true_fraud_risk", 0.0)) + (0.3 if c.priority <= 2 else 0.0)
                        for c in remaining_cases]
         total_risk = sum(risk_scores) or 1.0
         shares = [r / total_risk for r in risk_scores]
@@ -1565,9 +1585,9 @@ def compute_step_reward(
         predicted_positive = (action_type == "reject")
         # "positive" meaning "flagged as problematic"
         actual_positive_map = {
-            CaseType.REFUND: case.true_fraud_risk > 0.5,
-            CaseType.INVOICE: case.true_is_duplicate,
-            CaseType.KYC: not case.true_doc_valid,
+            CaseType.REFUND: float(_case_attr(case, "true_fraud_risk", 0.0)) > 0.5,
+            CaseType.INVOICE: bool(_case_attr(case, "true_is_duplicate", False)),
+            CaseType.KYC: not bool(_case_attr(case, "true_doc_valid", True)),
             CaseType.TRIAGE: case.priority <= 2,
         }
         actual_positive = actual_positive_map.get(case.case_type, False)
@@ -1585,14 +1605,14 @@ def compute_step_reward(
         )
 
     if action_type == "approve" and case.case_type == CaseType.REFUND:
-        if case.true_fraud_risk > 0.5:
+        if float(_case_attr(case, "true_fraud_risk", 0.0)) > 0.5:
             result.cascade_rewards["fraud_rate"] = compute_fraud_cascade(
                 cumulative_fraud_approvals=episode_metrics.chargebacks + 1,
                 total_decisions=episode_metrics.cases_resolved + 1,
             )
 
     if action_type == "approve" and case.case_type == CaseType.KYC:
-        if not case.kyc_complete:
+        if not bool(_case_attr(case, "kyc_complete", False)):
             result.cascade_rewards["compliance"] = compute_compliance_cascade(
                 compliance_failures=episode_metrics.compliance_violations + 1,
                 remaining_kyc_cases=sum(
@@ -1602,7 +1622,7 @@ def compute_step_reward(
             )
 
     if action_type == "approve" and case.case_type == CaseType.INVOICE:
-        if case.true_is_duplicate:
+        if bool(_case_attr(case, "true_is_duplicate", False)):
             result.cascade_rewards["cashflow"] = compute_cashflow_cascade(
                 duplicate_amount_approved=case.amount,
             )
@@ -1623,7 +1643,6 @@ def compute_step_reward(
 
 def phi_refund(case: CaseState) -> float:
     """Potential function for refund workflow progress."""
-    workflow_data = getattr(case, "workflow_data", {}) or {}
     phi = 0.0
     # Evidence gathering progress
     if case.evidence_items_available > 0:
@@ -1637,14 +1656,13 @@ def phi_refund(case: CaseState) -> float:
     # Customer notified (prerequisite for closing)
     if case.customer_notified:
         phi += 0.20
-    if workflow_data.get("dispute_stage") in {"evidence_submitted", "won", "finalized"}:
+    if _workflow_value(case, "dispute_stage") in {"evidence_submitted", "won", "finalized"}:
         phi += 0.10
     return phi
 
 
 def phi_invoice(case: CaseState) -> float:
     """Potential function for invoice reconciliation progress."""
-    workflow_data = getattr(case, "workflow_data", {}) or {}
     phi = 0.0
     # Three-way match progress (PO, invoice, receipt)
     if case.checks_required > 0:
@@ -1658,9 +1676,9 @@ def phi_invoice(case: CaseState) -> float:
     # Communication (vendor contacted if needed)
     if case.notifications_required > 0:
         phi += 0.15 * (case.notifications_sent / case.notifications_required)
-    if workflow_data.get("credit_memo_status") in {"requested", "received", "applied"}:
+    if _workflow_value(case, "credit_memo_status") in {"requested", "received", "applied"}:
         phi += 0.10
-    if workflow_data.get("approval_status") in {"pending_secondary", "approved"}:
+    if _workflow_value(case, "approval_status") in {"pending_secondary", "approved"}:
         phi += 0.05
     return phi
 
