@@ -1,0 +1,41 @@
+policy_id: refund_policy
+policy_type: refund
+title: Ecommerce refund exception policy
+version: "1.0"
+effective_date: "2026-04-01"
+status: active
+clauses:
+  - clause_id: refund_auto_approve
+    clause_type: auto_approve
+    description: Refunds at or below $500 may be approved when fraud risk is not high.
+    mandatory: true
+    conditions:
+      - field: refund_amount
+        operator: lte
+        value: 500
+    actions:
+      - action_type: approve
+        reason_code: standard_approval
+  - clause_id: refund_manager_review
+    clause_type: approval_required
+    description: Refunds above $500 require manager review or escalation.
+    mandatory: true
+    conditions:
+      - field: refund_amount
+        operator: gt
+        value: 500
+    actions:
+      - action_type: escalate
+        target: manager_review
+        reason_code: threshold_exceeded
+  - clause_id: refund_fraud_hold
+    clause_type: auto_deny
+    description: High-confidence fraud indicators require rejection or fraud escalation.
+    mandatory: true
+    conditions:
+      - field: refund_amount
+        operator: gt
+        value: 0
+    actions:
+      - action_type: reject
+        reason_code: suspicious_pattern

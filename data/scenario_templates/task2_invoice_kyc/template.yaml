@@ -1,0 +1,8 @@
+task_id: invoice_plus_kyc
+difficulty: medium
+initial_time: 540
+atomic_factors:
+  invoice_error_type: [true_duplicate, tolerance_band]
+  response_latency: [slow]
+  doc_validity: [valid, recently_expired]
+  sla_tightness: [standard]

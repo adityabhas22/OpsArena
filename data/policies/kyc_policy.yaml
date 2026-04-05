@@ -1,0 +1,30 @@
+policy_id: kyc_policy
+policy_type: compliance
+title: Merchant payout KYC policy
+version: "1.0"
+effective_date: "2026-04-01"
+status: active
+clauses:
+  - clause_id: kyc_require_document
+    clause_type: require_info
+    description: Payout approval requires a verified identity document.
+    mandatory: true
+    conditions:
+      - field: priority
+        operator: gte
+        value: 1
+    actions:
+      - action_type: require_info
+        target: individual.verification.document
+        reason_code: missing_documentation
+  - clause_id: kyc_complete_before_approve
+    clause_type: approval_required
+    description: Never approve a payout while KYC is incomplete.
+    mandatory: true
+    conditions:
+      - field: priority
+        operator: gte
+        value: 1
+    actions:
+      - action_type: defer
+        reason_code: awaiting_response

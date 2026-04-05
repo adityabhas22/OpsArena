@@ -1,0 +1,8 @@
+task_id: queue_triage
+difficulty: hard
+initial_time: 600
+atomic_factors:
+  amount_tier: [medium, high]
+  escalation_load: [medium]
+  sla_tightness: [urgent, standard]
+  fraud_risk: [low, medium, high]

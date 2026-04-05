@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opsarena"
+version = "0.1.0"
+description = "High-fidelity ecommerce operations OpenEnv environment"
+requires-python = ">=3.11"
+dependencies = [
+  "openenv-core>=0.2.3",
+  "pydantic>=2.10",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28",
+  "pytest>=8.0",
+]
+
+[project.scripts]
+server = "server.app:main"
+
+[tool.setuptools.packages.find]
+include = ["opsarena*", "server*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

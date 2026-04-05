@@ -1,0 +1,8 @@
+task_id: refund_exception
+difficulty: easy
+initial_time: 480
+atomic_factors:
+  amount_tier: [medium]
+  threshold_proximity: [near]
+  fraud_risk: [low, high]
+  sla_tightness: [standard]

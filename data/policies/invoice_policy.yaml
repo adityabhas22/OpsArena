@@ -1,0 +1,30 @@
+policy_id: invoice_policy
+policy_type: approval
+title: Invoice duplicate and mismatch policy
+version: "1.0"
+effective_date: "2026-04-01"
+status: active
+clauses:
+  - clause_id: invoice_three_way_match
+    clause_type: threshold
+    description: Invoice approval requires invoice, purchase order, and goods receipt review.
+    mandatory: true
+    conditions:
+      - field: invoice_total
+        operator: gt
+        value: 0
+    actions:
+      - action_type: require_info
+        target: goods_receipt
+        reason_code: missing_documentation
+  - clause_id: invoice_duplicate_block
+    clause_type: auto_deny
+    description: Confirmed duplicate invoices must be rejected.
+    mandatory: true
+    conditions:
+      - field: invoice_total
+        operator: gt
+        value: 0
+    actions:
+      - action_type: reject
+        reason_code: duplicate_match

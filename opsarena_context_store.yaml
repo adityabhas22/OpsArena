@@ -1,0 +1,307 @@
+project:
+  name: OpsArena
+  version: 0.1
+  type: rl_environment
+  thesis: >-
+    Deterministic, partially observable, API-first RL environment for enterprise
+    exception handling and queue-based operations.
+  primary_goal: >-
+    Train and evaluate agents that make correct, policy-compliant, cost-aware
+    operational decisions over time.
+  non_goals:
+    - browser_automation_in_v0
+    - llm_as_primary_grader
+    - free_form_actions
+    - production_connector_integration
+
+environment:
+  formalism: POMDP
+  api: Gymnasium
+  state:
+    top_level:
+      - time
+      - queue
+      - cases
+      - entities
+      - policies
+      - resources
+      - scheduled_events
+      - metrics
+      - hidden
+      - audit_log
+    hidden_variables:
+      - fraud_risk
+      - duplicate_invoice_truth
+      - document_validity
+      - response_latency_class
+      - downstream_loss_bucket
+  observations:
+    panes:
+      - queue_view
+      - case_detail_view
+      - policy_lookup
+      - clock_and_system_state
+    rules:
+      - render_from_structured_state
+      - do_not_expose_hidden_variables
+      - respect_permissions
+  actions:
+    information:
+      - list_queue
+      - open_case
+      - view_record
+      - query_policy
+      - search_cases
+      - inspect_audit
+    workflow:
+      - request_info
+      - approve
+      - reject
+      - escalate
+      - defer
+      - assign
+    communication:
+      - send_message
+      - log_internal_note
+    queue_management:
+      - prioritize
+      - batch_reorder
+      - advance_clock
+    closing:
+      - close_case
+      - reopen_case
+  workflows_v0:
+    - high_value_refund_exception
+    - duplicate_invoice_mismatch
+    - missing_kyc_for_payout
+    - queue_triage_under_sla_pressure
+  downstream_events:
+    - chargeback_event
+    - reopen_event
+    - sla_breach_event
+    - vendor_response_event
+    - queue_overload_event
+
+reward:
+  report_score: objective_score
+  training_score: train_reward
+  objective_components:
+    correct_resolution: 10.0
+    critical_policy_violation: -20.0
+    downstream_loss_event: -12.0
+    sla_miss: -5.0
+    unnecessary_escalation: -3.0
+    invalid_action: -2.0
+    tool_call: -0.1
+    simulated_minute_over_budget: -0.02
+    reopen_event: -8.0
+  shaping:
+    enabled: true
+    method: potential_based_reward_shaping
+    formula: R_total = R_objective + lambda * (gamma * Phi(s_next) - Phi(s))
+    safe_features:
+      - required_checks_completed_ratio
+      - evidence_completeness_ratio
+      - communication_completion_ratio
+      - queue_risk_reduction_ratio
+    anti_patterns:
+      - reward_approve_action_directly
+      - reward_escalate_action_directly
+      - reward_step_count
+      - reward_spammable_actions
+  validation_policies:
+    - always_approve
+    - always_escalate
+    - always_request_info
+    - shortest_path_greedy_closer
+
+graders:
+  primary:
+    type: state_based_outcome_grader
+    checks:
+      - final_resolution_valid
+      - mandatory_actions_completed
+      - no_critical_compliance_violation
+      - no_unresolved_blockers
+      - downstream_constraints_satisfied
+  secondary:
+    type: trajectory_invariant_grader
+    checks:
+      - policy_lookup_before_high_value_approval
+      - kyc_complete_before_payout
+      - notification_before_close
+      - escalate_only_to_allowed_queue
+      - no_forbidden_data_access
+  reliability:
+    metrics:
+      - pass_rate
+      - mean_objective_score
+      - pass_k
+      - score_variance
+  efficiency:
+    metrics:
+      - step_count
+      - tool_calls
+      - simulated_minutes
+      - unnecessary_actions
+      - queue_switches
+  safety:
+    checks:
+      - role_based_permission_violations
+      - forbidden_disclosure
+      - refusal_on_unsafe_requests
+      - hidden_field_exposure
+  optional_llm_grader:
+    allowed_for:
+      - customer_message_clarity
+      - escalation_summary_quality
+    forbidden_for:
+      - core_correctness
+      - policy_compliance
+      - final_pass_fail
+
+scenario_generation:
+  method: seeded_compositional_templates
+  atomic_factors:
+    amount_tier:
+      - low
+      - medium
+      - high
+    threshold_crossed:
+      - true
+      - false
+    missing_information_count:
+      - 0
+      - 1
+      - 2
+      - 3
+    risk_label:
+      - low
+      - medium
+      - high
+    response_latency:
+      - fast
+      - slow
+      - none
+    escalation_queue_load:
+      - light
+      - medium
+      - heavy
+    sla_tightness:
+      - relaxed
+      - standard
+      - urgent
+  splits:
+    - train
+    - dev
+    - test
+  difficulty_tiers:
+    - tier_1_single_case_no_downstream_events
+    - tier_2_single_case_hidden_risk_with_downstream_event
+    - tier_3_multi_case_queue_limited_human_capacity
+    - tier_4_role_constraints_and_cascading_effects
+
+baselines:
+  - random_policy
+  - rule_based_policy
+  - oracle_policy
+  - optional_imitation_policy
+
+repo:
+  package_name: opsarena
+  structure:
+    - opsarena/env.py
+    - opsarena/state.py
+    - opsarena/actions.py
+    - opsarena/observations.py
+    - opsarena/transitions.py
+    - opsarena/scheduler.py
+    - opsarena/rewards.py
+    - opsarena/graders.py
+    - opsarena/scenario.py
+    - opsarena/render.py
+    - opsarena/policies.py
+    - opsarena/logging.py
+    - configs/reward_weights.yaml
+    - configs/grader_weights.yaml
+    - data/scenario_templates/
+    - baselines/
+    - scripts/play_cli.py
+    - scripts/run_eval.py
+    - scripts/generate_scenarios.py
+    - tests/
+
+implementation_plan:
+  phase_1:
+    - define_state_action_event_schemas
+    - implement_refund_workflow
+    - implement_deterministic_state_grader
+    - implement_cli_loop
+  phase_2:
+    - add_invoice_and_kyc_workflows
+    - add_event_scheduler
+    - add_rule_based_baseline
+    - add_jsonl_logging
+  phase_3:
+    - add_queue_triage
+    - add_pass_k_harness
+    - add_held_out_test_split
+    - add_role_constraints
+  phase_4:
+    - optional_user_simulator
+    - optional_dual_control_mode
+    - optional_browser_wrapper
+
+research_resources:
+  - id: R1
+    title: The BrowserGym Ecosystem for Web Agent Research
+    citation: arXiv:2412.05467
+    relevance: gym_like_obs_and_action_spaces_for_agent_benchmarks
+  - id: R2
+    title: OSWorld
+    citation: arXiv:2404.07972
+    relevance: execution_based_evaluation_for_realistic_stateful_tasks
+  - id: R3
+    title: OdysseyBench
+    citation: arXiv:2508.09124
+    relevance: long_horizon_office_workflows
+  - id: R4
+    title: Tau-bench
+    citation: arXiv:2406.12045
+    relevance: goal_state_grading_and_pass_k_reliability
+  - id: R5
+    title: CRMArena
+    citation: arXiv:2411.02305
+    relevance: business_objects_and_latent_variables
+  - id: R6
+    title: CRMArena-Pro
+    citation: arXiv:2505.18878
+    relevance: multi_turn_business_eval_and_confidentiality
+  - id: R7
+    title: SAP KDD 2025 Tutorial on LLM Agent Evaluation
+    citation: sap-samples.github.io/llm-agents-eval-tutorial
+    relevance: enterprise_gaps_access_control_reliability_dynamic_long_horizon_compliance
+  - id: R8
+    title: OdysseyArena
+    citation: arXiv:2602.05843
+    relevance: inductive_discovery_and_long_horizon_interactions
+  - id: R9
+    title: Policy Invariance Under Reward Transformations
+    citation: Ng_Harada_Russell
+    relevance: potential_based_reward_shaping
+  - id: R10
+    title: Google Cloud methodical approach to agent evaluation
+    citation: November_18_2025_blog
+    relevance: layered_eval_outcome_trajectory_trust
+  - id: R11
+    title: Anthropic Demystifying evals for AI agents
+    citation: January_09_2026_blog
+    relevance: definitions_of_task_trial_grader_outcome_harness
+  - id: R12
+    title: Tau2-bench
+    citation: arXiv:2506.07982
+    relevance: compositional_task_generation_and_dual_control
+  - id: R13
+    title: OSWorld-Human
+    citation: arXiv:2506.16042
+    relevance: efficiency_metrics_matter_not_just_success

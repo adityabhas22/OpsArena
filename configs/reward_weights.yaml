@@ -1,0 +1,273 @@
+# OpsArena Reward Configuration
+# ================================
+# All numerical calibrations are based on typical ecommerce operations metrics.
+# These are starting values -- tune after running pathological policy tests.
+#
+# IMPORTANT: objective rewards are for benchmark scoring.
+#            shaping rewards are for training ONLY and never reported as scores.
+
+# ---------------------------------------------------------------------------
+# Global settings
+# ---------------------------------------------------------------------------
+global:
+  gamma: 0.99                    # discount factor
+  shaping_lambda: 0.5            # shaping reward scale (0 = disabled)
+  shaping_enabled: true
+  report_mode: objective_only    # never report shaping as benchmark score
+
+# ---------------------------------------------------------------------------
+# Section 1: Per-workflow reward parameters
+# ---------------------------------------------------------------------------
+
+refund:
+  # Decision outcomes
+  correct_approval_base: 8.0
+  correct_rejection_base: 12.0          # fraud catch is more valuable
+  false_positive_cltv_loss: -15.0       # lost future revenue from angry customer
+  false_negative_chargeback_base: -25.0 # chargeback fee + loss + operational
+  # Amount scaling
+  amount_multiplier_approval: 0.02      # 2% of refund amount as bonus
+  amount_multiplier_chargeback: 0.15    # 15% of refund amount as penalty
+  # Process compliance
+  policy_check_bonus: 2.0
+  notification_bonus: 1.5
+  evidence_max_bonus: 3.0
+  # Efficiency
+  unnecessary_escalation: -3.0
+  tool_call_cost: -0.1
+
+invoice:
+  # Match quality outcomes
+  correct_match_base: 8.0
+  catch_duplicate_base: 15.0
+  catch_duplicate_amount_factor: 0.01   # 1% of invoice value saved
+  false_reject_base: -5.0
+  vendor_delay_cost_per_day: -0.5
+  false_approve_duplicate_base: -20.0
+  false_approve_amount_factor: 0.02     # 2% of duplicate amount lost
+  # Cash flow
+  on_time_bonus: 3.0
+  early_discount_bonus: 2.0             # captured 2/10 Net 30 discount
+  # Vendor relationship
+  unnecessary_doc_request: -1.5
+  correct_doc_request: 1.0
+  vendor_wait_cost_per_day: -0.3
+  three_way_match_bonus: 2.0
+
+kyc:
+  # Compliance outcomes (extreme asymmetry)
+  approved_with_complete_kyc: 10.0
+  approved_incomplete_kyc: -50.0        # CATASTROPHIC regulatory violation
+  approved_invalid_docs: -30.0          # serious compliance failure
+  correctly_held_pending: 3.0
+  correct_doc_request: 2.0
+  unnecessary_doc_request: -2.0
+  # Speed
+  on_time_payout_bonus: 5.0
+  unnecessary_delay_per_hour: -0.5
+  expedited_high_priority: 3.0
+  # Risk tier multipliers
+  high_risk_multiplier: 2.0             # penalties doubled for high-risk tier
+  low_risk_multiplier: 0.5              # penalties halved for low-risk
+  # Asymmetry
+  fn_fp_ratio: 50.0                     # false negative is 50x worse than false positive
+
+triage:
+  # Throughput
+  throughput_per_case: 2.0
+  throughput_bonus_threshold: 0.8       # ratio of cases resolved to earn bonus
+  throughput_bonus: 5.0
+  # Priority weights
+  priority_weights:
+    1: 5.0    # P1: critical
+    2: 3.0    # P2: high
+    3: 1.5    # P3: medium
+    4: 0.8    # P4: low
+    5: 0.3    # P5: trivial
+  priority_inversion_penalty: -3.0
+  # Utilization
+  utilization_bonus_max: 4.0
+  utilization_threshold: 0.7
+  idle_penalty: -1.0
+  context_switch_penalty: -0.5
+  # SLA management
+  sla_save_bonus: 4.0
+  sla_breach_penalty: -5.0
+  near_miss_save_bonus: 2.0
+  near_miss_threshold: 0.1             # <10% time remaining
+
+# ---------------------------------------------------------------------------
+# Section 2: Time-varying reward (SLA pressure)
+# ---------------------------------------------------------------------------
+
+time_pressure:
+  steepness: 10.0                       # sigmoid steepness
+  inflection_point: 0.2                 # pressure = 0.5 at 20% time remaining
+  max_pre_breach_penalty: -5.0
+  breach_fixed_penalty: -8.0
+  breach_per_minute: -0.1
+  priority_sla_multipliers:
+    1: 2.0    # P1 breach is 2x as costly
+    2: 1.5
+    3: 1.0
+    4: 0.7
+    5: 0.5
+  # Sigmoid behavior reference:
+  #   80% time remaining -> pressure ~= 0.002
+  #   50% time remaining -> pressure ~= 0.047
+  #   20% time remaining -> pressure ~= 0.500
+  #   10% time remaining -> pressure ~= 0.731
+  #    5% time remaining -> pressure ~= 0.818
+  #    0% (at deadline)  -> pressure ~= 0.881
+
+# ---------------------------------------------------------------------------
+# Section 3: Value of Information (VOI) parameters
+# ---------------------------------------------------------------------------
+
+information_value:
+  alpha: 2.0                            # max marginal VOI reward
+  beta: 0.05                            # time cost per minute
+  gamma_penalty: -1.0                   # redundant query penalty
+  base_confidence: 0.3                  # confidence with zero evidence
+  max_evidence_reward: 5.0              # cap total evidence reward per case
+  redundancy_penalty: -1.0
+  irrelevant_query_penalty: -0.5
+  # Anti-gaming:
+  #   Diminishing returns via geometric confidence model
+  #   Relevance gating via per-workflow evidence matrices
+  #   Time cost interaction with SLA pressure
+  #   Decision-conditional retroactive adjustment
+
+# ---------------------------------------------------------------------------
+# Section 4: Queue-level portfolio reward
+# ---------------------------------------------------------------------------
+
+queue_portfolio:
+  throughput_scale: 10.0
+  throughput_baseline: 0.6              # expected resolution ratio
+  throughput_bonus_per_pct: 0.5
+  priority_inversion_penalty: -3.0
+  sla_health_bonus: 15.0               # quadratic: (1-breach_rate)^2
+  risk_concentration_penalty: -8.0      # Herfindahl index of remaining risk
+  backlog_coefficient: 5.0
+  escalation_overload_penalty: -10.0
+  escalation_overload_threshold: 0.8
+
+# ---------------------------------------------------------------------------
+# Section 5: Asymmetric error costs (calibrated from real ecommerce data)
+# ---------------------------------------------------------------------------
+
+asymmetric_costs:
+  refund:
+    # FP = block legitimate customer, FN = approve fraudulent refund
+    true_positive: 8.0                  # correctly caught fraud
+    true_negative: 5.0                  # correctly approved legitimate
+    false_positive: -12.0              # blocked legitimate (CLTV loss ~$145)
+    false_negative: -40.0             # approved fraud (chargeback ~$500)
+    asymmetry_ratio: 3.4               # FN/FP cost ratio
+    amount_scale_factor: 0.001
+
+  invoice:
+    # FP = reject valid invoice, FN = approve duplicate
+    true_positive: 15.0                 # correctly caught duplicate
+    true_negative: 5.0                  # correctly approved valid
+    false_positive: -5.0               # rejected valid (~$305 real cost)
+    false_negative: -90.0             # approved duplicate (~$5,650 real cost)
+    asymmetry_ratio: 18.5
+    amount_scale_factor: 0.001
+
+  kyc:
+    # FP = block compliant user, FN = approve non-compliant
+    true_positive: 10.0                 # correctly blocked non-compliant
+    true_negative: 8.0                  # correctly approved compliant
+    false_positive: -3.0               # blocked compliant (~$175 real cost)
+    false_negative: -300.0            # approved non-compliant (~$17,000 real cost)
+    asymmetry_ratio: 97.0
+    amount_scale_factor: 0.0            # not amount-dependent for KYC
+
+  triage:
+    # FP = over-prioritize, FN = under-prioritize
+    true_positive: 4.0
+    true_negative: 2.0
+    false_positive: -3.0
+    false_negative: -40.0
+    asymmetry_ratio: 13.0
+    amount_scale_factor: 0.0
+
+# ---------------------------------------------------------------------------
+# Section 6: Cascade / compound reward parameters
+# ---------------------------------------------------------------------------
+
+cascades:
+  escalation:
+    load_threshold: 0.6                 # cascade triggers at 60% capacity
+    coefficient: 8.0                    # quadratic penalty coefficient
+    delay_per_overload_case: 15.0       # minutes delay per excess case
+
+  fraud_rate:
+    baseline_rate: 0.015                # 1.5% normal fraud rate
+    coefficient: 5.0
+    processor_fee_increase_per_pct: 0.002
+    avg_daily_transaction_volume: 50000.0
+    # Processor fee tiers:
+    # < 1.0% chargeback rate:  standard
+    # 1.0-1.5%:                monitoring ($10-25k/month)
+    # 1.5-2.0%:                excessive ($25-50k/month)
+    # > 2.0%:                  account termination risk
+
+  compliance:
+    coefficient: 3.0
+    scrutiny_time_multiplier_per_failure: 0.2  # +20% processing time per failure
+
+  cashflow:
+    coefficient: 4.0
+    total_payables_baseline: 500000.0
+    vendor_delay_threshold: 0.1         # cascade at >10% of payables
+
+# ---------------------------------------------------------------------------
+# Section 7: Potential-based shaping (Phi functions)
+# ---------------------------------------------------------------------------
+
+shaping_potentials:
+  refund:
+    evidence_weight: 0.35
+    checks_weight: 0.25
+    policy_checked_weight: 0.20
+    notification_weight: 0.20
+
+  invoice:
+    three_way_match_weight: 0.40
+    evidence_weight: 0.30
+    policy_checked_weight: 0.15
+    communication_weight: 0.15
+
+  kyc:
+    document_completeness_weight: 0.45
+    policy_reviewed_weight: 0.25
+    communication_weight: 0.15
+    evidence_weight: 0.15
+
+  triage:
+    resolution_progress_weight: 0.40
+    sla_health_weight: 0.35
+    escalation_health_weight: 0.25
+
+# ---------------------------------------------------------------------------
+# Section 8: Validation thresholds
+# ---------------------------------------------------------------------------
+
+validation:
+  pathological_policies:
+    - always_approve
+    - always_escalate
+    - always_gather_info
+    - greedy_closer
+  expected_ranking:
+    - reasonable_policy
+    - greedy_closer
+    - always_approve
+    - always_escalate
+    - always_gather_info
+  max_acceptable_pathological_score_ratio: 0.5
+  # If any pathological policy scores > 50% of the reasonable policy score,
+  # the reward function needs revision.
