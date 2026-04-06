@@ -74,6 +74,16 @@ For GRPO training experiments, install the training extra as well:
 pip install -e ".[dev,train]"
 ```
 
+For `--use-vllm`, install the vLLM extra and make sure the active PyTorch build has CUDA
+libraries. On Linux `aarch64`, the default PyPI `torch` wheel may be CPU-only; if that
+happens, replace it with the official CUDA 13.0 wheel:
+
+```bash
+uv pip install --python .venv/bin/python -e ".[dev,train,train-vllm]"
+uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cu130 \
+  --reinstall torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
+```
+
 ### Run tests
 
 ```bash
@@ -120,6 +130,9 @@ python scripts/train_refund_grpo.py \
 ```
 
 This uses the refund-only wrapper in `opsarena/training/refund_grpo_env.py`, not the full environment action surface. Start here before attempting multi-workflow training.
+
+With `--use-vllm`, the script now checks for a CUDA-enabled PyTorch install up front and exits
+with an actionable message instead of failing deep inside TRL/vLLM imports.
 
 ## Using the client
 

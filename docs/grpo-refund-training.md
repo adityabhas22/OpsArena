@@ -23,13 +23,15 @@ The base environment exposes a large typed action space across refunds, AP, KYC,
 
 ## Reward function
 
-`refund_terminal_benchmark_reward` uses terminal environment state only:
+`refund_terminal_benchmark_reward` uses bounded shaping plus a terminal bonus:
 
-- incomplete episodes receive `0.0`
-- completed episodes receive final `benchmark_score`
+- valid tool calls add a small shaping reward
+- intermediate `benchmark_score` progress adds bounded shaping even before the episode is done
+- completed episodes receive a larger terminal bonus from final `benchmark_score`
 - repeated invalid actions apply a small penalty
 
-This keeps the RL objective aligned with the benchmark instead of reintroducing dense legacy business reward.
+This keeps the policy anchored to the final grader while avoiding a dead gradient when the base
+model cannot yet complete refund episodes reliably.
 
 ## Usage
 
@@ -37,6 +39,17 @@ Install training dependencies:
 
 ```bash
 pip install -e ".[dev,train]"
+```
+
+If you want `--use-vllm`, also install the vLLM extra and verify that the active PyTorch
+build includes CUDA libraries. On Linux `aarch64`, the default PyPI `torch` wheel can be
+CPU-only, which causes `vllm` imports to fail with `libtorch_cuda.so: cannot open shared
+object file`. Replace it with the official CUDA 13.0 wheel in the repo venv:
+
+```bash
+uv pip install --python .venv/bin/python -e ".[dev,train,train-vllm]"
+uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cu130 \
+  --reinstall torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
 ```
 
 Run a first training job:

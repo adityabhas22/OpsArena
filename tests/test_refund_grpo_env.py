@@ -26,7 +26,7 @@ def test_refund_grpo_env_can_run_oracle_like_happy_path():
     assert env.benchmark_score > 0.9
 
 
-def test_refund_terminal_benchmark_reward_penalizes_incomplete_episodes():
+def test_refund_terminal_benchmark_reward_gives_shaping_but_prefers_completion():
     done_env = RefundExceptionToolEnv(seed_sequence=[7])
     done_env.reset()
     done_env.open_case("case_refund_1")
@@ -47,4 +47,5 @@ def test_refund_terminal_benchmark_reward_penalizes_incomplete_episodes():
     )
 
     assert rewards[0] > 0.85
-    assert rewards[1] == 0.0
+    assert rewards[1] > 0.0
+    assert rewards[1] < rewards[0]

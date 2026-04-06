@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import warnings
 from dataclasses import fields
 from functools import partial
@@ -12,6 +13,37 @@ from opsarena.training import (
 )
 from opsarena.training.cuda_lib_path import prepend_nvidia_cuda_runtime_lib_path
 from opsarena.training.trl_tokenizer import prepare_tokenizer_for_grpo
+
+
+def _validate_vllm_runtime(args: argparse.Namespace) -> None:
+    """Fail fast when ``--use-vllm`` is requested from a CPU-only PyTorch install."""
+
+    if not args.use_vllm:
+        return
+
+    try:
+        import torch
+    except ImportError as exc:  # pragma: no cover - exercised only in training environments
+        raise SystemExit(
+            "--use-vllm requires PyTorch to be installed in the active environment before TRL imports."
+        ) from exc
+
+    torch_lib = os.path.join(os.path.dirname(torch.__file__), "lib")
+    has_libtorch_cuda = os.path.isfile(os.path.join(torch_lib, "libtorch_cuda.so"))
+    torch_cuda = getattr(torch.version, "cuda", None)
+
+    if torch_cuda and has_libtorch_cuda and torch.cuda.is_available():
+        return
+
+    raise SystemExit(
+        "--use-vllm requires a CUDA-enabled PyTorch build in the active interpreter.\n"
+        f"Detected torch {torch.__version__} at {torch.__file__}\n"
+        f"torch.version.cuda={torch_cuda!r}, libtorch_cuda.so present={has_libtorch_cuda}, "
+        f"torch.cuda.is_available()={torch.cuda.is_available()}.\n"
+        "For this repo's default .venv on Linux/aarch64, install the matching CUDA wheels with:\n"
+        "  uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cu130 "
+        "--reinstall torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0"
+    )
 
 
 def _build_grpo_config(args: argparse.Namespace, GRPOConfig: type) -> object:
@@ -95,6 +127,7 @@ def main() -> None:
     args = parse_args()
     # So vLLM / TRL can find libcudart.so.* from PyTorch's nvidia-cuda-runtime wheels
     prepend_nvidia_cuda_runtime_lib_path()
+    _validate_vllm_runtime(args)
     try:
         from datasets import Dataset
         from peft import LoraConfig

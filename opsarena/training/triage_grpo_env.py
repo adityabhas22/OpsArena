@@ -83,11 +83,15 @@ def queue_triage_terminal_benchmark_reward(
 
     if log_metric is not None and environments:
         count = len(environments)
+        mean_benchmark = sum(env.benchmark_score for env in environments) / count
+        mean_reward = sum(rewards) / count
         log_metric("env/triage_done_rate", done_count / count)
         log_metric("env/triage_invalid_actions_mean", invalid_count / count)
         log_metric("env/triage_tool_calls_mean", total_tool_calls / count)
         log_metric("env/triage_cases_resolved_mean", total_cases_resolved / count)
-        log_metric("env/triage_terminal_score_mean", sum(rewards) / count)
+        log_metric("env/triage_benchmark_score_mean", mean_benchmark)
+        log_metric("env/triage_reward_mean", mean_reward)
+        log_metric("env/triage_terminal_score_mean", mean_reward)
 
     return rewards
 

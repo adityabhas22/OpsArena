@@ -400,10 +400,15 @@ def refund_terminal_benchmark_reward(
 
     if log_metric is not None and environments:
         count = len(environments)
+        mean_benchmark = sum(env.benchmark_score for env in environments) / count
+        mean_reward = sum(rewards) / count
         log_metric("env/refund_done_rate", done_count / count)
         log_metric("env/refund_invalid_actions_mean", invalid_count / count)
         log_metric("env/refund_tool_calls_mean", total_tool_calls / count)
-        log_metric("env/refund_terminal_score_mean", sum(rewards) / count)
+        log_metric("env/refund_benchmark_score_mean", mean_benchmark)
+        log_metric("env/refund_reward_mean", mean_reward)
+        # Backward-compatible alias for older dashboards.
+        log_metric("env/refund_terminal_score_mean", mean_reward)
 
     return rewards
 

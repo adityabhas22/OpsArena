@@ -190,7 +190,7 @@ def load_policy_model(
 
     model = AutoModelForCausalLM.from_pretrained(
         base_model_id,
-        torch_dtype=dtype,
+        dtype=dtype,
         device_map="auto",
         trust_remote_code=True,
     )

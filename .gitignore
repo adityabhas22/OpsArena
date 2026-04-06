@@ -1,7 +1,46 @@
+# General
+.DS_Store
+Thumbs.db
+*.log
+uv.lock
+
+# Virtual environments
 .venv/
+env/
+ENV/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.egg-info/
+*.dist-info/
+pip-wheel-metadata/
+
+# Tool caches
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-__pycache__/
-*.pyc
-.DS_Store
+.cache/
+
+# Build outputs
+build/
+dist/
+*.wheel
+docs/_build/
+
+# IDE / editor
+.vscode/
+.idea/
+*.iml
+
+# Project-specific
+artifacts/
+data/
+temp/
+*.db
+*.sqlite
+*.sqlite3
+
