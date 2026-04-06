@@ -80,10 +80,8 @@ def _build_grpo_config(args: argparse.Namespace, GRPOConfig: type) -> object:
         "log_completions": True,
         "logging_steps": 1,
         "save_steps": 50,
-        # Qwen3 defaults to <think> mode which burns the entire token budget on
-        # chain-of-thought before emitting a tool call.  Disable it so the model
-        # spends its tokens on actual tool-calling turns.
-        "chat_template_kwargs": {"enable_thinking": False},
+        # Qwen3 thinking mode: let the model reason between tool calls.
+        "chat_template_kwargs": {"enable_thinking": True},
     }
     if args.use_vllm:
         candidate["vllm_max_model_length"] = args.max_prompt_length + args.max_completion_length + 256

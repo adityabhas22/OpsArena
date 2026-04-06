@@ -25,13 +25,13 @@ REFUND_GRPO_SYSTEM_PROMPT = (
     "1. open_case(case_id=...) — use the case_id from the queue\n"
     "2. query_policy(policy_id=\"refund_policy\")\n"
     "3. Make the decision: approve, reject, accept_dispute, or challenge_dispute\n"
-    "4. send_message(case_id=..., template_id=\"refund_approved\" or \"case_closed\") if obligations show send_message\n"
+    "4. send_message if obligations show send_message\n"
     "5. send_to_qa then approve_qa if obligations show qa\n"
     "6. close_case(case_id=...) — ALWAYS close the case at the end\n\n"
     "RULES:\n"
     "- Use exact IDs from the observation. Never invent IDs.\n"
     "- Keep calling tools until done=true. Do not stop early.\n"
-    "- Be concise. Just call the next tool."
+    "- Think briefly about which tool to call next, then call it. Keep thinking under 50 words."
 )
 
 # ---------------------------------------------------------------------------
