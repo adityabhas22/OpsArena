@@ -80,8 +80,10 @@ def _build_grpo_config(args: argparse.Namespace, GRPOConfig: type) -> object:
         "log_completions": True,
         "logging_steps": 1,
         "save_steps": 50,
-        # Qwen3 thinking mode: let the model reason between tool calls.
-        "chat_template_kwargs": {"enable_thinking": True},
+        # Qwen3 thinking OFF (issue #1817: thinks about tools but doesn't emit them).
+        "chat_template_kwargs": {"enable_thinking": False},
+        # Temperature 1.0 critical for cold-start tool-calling exploration.
+        "temperature": 1.0,
     }
     if args.use_vllm:
         candidate["vllm_max_model_length"] = args.max_prompt_length + args.max_completion_length + 256

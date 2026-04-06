@@ -68,10 +68,14 @@ def _build_grpo_config(args: argparse.Namespace, GRPOConfig: type) -> object:
         "log_completions": True,
         "logging_steps": 1,
         "save_steps": 50,
-        # Qwen3 thinking mode: let the model reason between tool calls.
-        # The compact prompt + "be concise" instruction keeps thinking short
-        # while enabling multi-step planning.
-        "chat_template_kwargs": {"enable_thinking": True},
+        # Qwen3 thinking mode OFF: Qwen3 issue #1817 shows that with thinking
+        # enabled, the model plans tool calls in <think> but fails to emit them
+        # ~60% of the time.  Disable so tool calls are actually generated.
+        "chat_template_kwargs": {"enable_thinking": False},
+        # Temperature 1.0 is critical for cold-start GRPO tool calling
+        # (ToolRL paper, arxiv:2504.13958).  TRL default 0.9 is too greedy —
+        # all generations converge to the same non-tool response.
+        "temperature": 1.0,
     }
     if args.use_vllm:
         candidate["vllm_max_model_length"] = args.max_prompt_length + args.max_completion_length + 256
@@ -109,7 +113,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True, help="Base chat model, for example Qwen/Qwen3-4B-Instruct-2507.")
     parser.add_argument("--output-dir", default="artifacts/refund-grpo")
     parser.add_argument("--num-examples", type=int, default=256)
-    parser.add_argument("--learning-rate", type=float, default=5e-6)
+    parser.add_argument("--learning-rate", type=float, default=1e-6)
     parser.add_argument("--max-steps", type=int, default=600)
     parser.add_argument("--num-generations", type=int, default=4)
     parser.add_argument("--per-device-train-batch-size", type=int, default=1)
