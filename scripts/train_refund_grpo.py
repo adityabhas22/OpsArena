@@ -76,6 +76,13 @@ def _build_grpo_config(args: argparse.Namespace, GRPOConfig: type) -> object:
     if args.use_vllm:
         candidate["vllm_max_model_length"] = args.max_prompt_length + args.max_completion_length + 256
 
+    # TRL requires generation_batch_size >= num_generations and divisible by it.
+    # Default is per_device_train_batch_size * gradient_accumulation_steps which
+    # may be too small when num_generations is large.
+    default_gen_batch = args.per_device_train_batch_size * args.gradient_accumulation_steps
+    if default_gen_batch < args.num_generations:
+        candidate["generation_batch_size"] = args.num_generations
+
     valid = {f.name for f in fields(GRPOConfig)}
     filtered = {k: v for k, v in candidate.items() if k in valid}
     dropped = set(candidate) - set(filtered)
