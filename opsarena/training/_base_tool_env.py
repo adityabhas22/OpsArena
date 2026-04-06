@@ -355,6 +355,49 @@ class BaseToolEnv:
         return self._step({"action_type": "advance_clock", "minutes": minutes})
 
     # ------------------------------------------------------------------
+    # Milestone scoring (shared across all reward functions)
+    # ------------------------------------------------------------------
+
+    def milestone_score(self, cap: float = 0.25) -> tuple[float, dict[str, bool]]:
+        """Compute grader-aligned milestone shaping from the audit trail.
+
+        Each milestone corresponds to a process check the grader actually scores,
+        ensuring shaping points in the same direction as the terminal benchmark.
+
+        Returns (score_capped_at_cap, milestone_dict).
+        """
+        state = self._env._state
+        if state is None:
+            return 0.0, {}
+
+        case_audits: dict[str, set[str]] = {}
+        for entry in state.audit_log:
+            if entry.case_id:
+                case_audits.setdefault(entry.case_id, set()).add(entry.action_type)
+
+        milestones: dict[str, bool] = {}
+        for case in state.cases.values():
+            cid = case.case_id
+            events = case_audits.get(cid, set())
+            milestones[f"{cid}/opened"] = "open_case" in events
+            milestones[f"{cid}/policy_queried"] = "query_policy" in events
+            milestones[f"{cid}/decision_made"] = case.resolution.value != "pending"
+            milestones[f"{cid}/notified"] = (
+                not case.requires_customer_notification or case.customer_notified
+            )
+            milestones[f"{cid}/qa_done"] = (
+                not case.qa_required or "approve_qa" in events
+            )
+            milestones[f"{cid}/closed"] = case.status == "closed"
+
+        if not milestones:
+            return 0.0, milestones
+
+        hit = sum(1 for v in milestones.values() if v)
+        total = len(milestones)
+        return min(cap, cap * hit / max(1, total)), milestones
+
+    # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
@@ -367,119 +410,85 @@ class BaseToolEnv:
         self._last_observation = self._env.step(RawOpsAction(**payload))
         return self._render_observation(self._last_observation)
 
+    # Workflow metadata keys relevant for each domain, shown in compact form.
+    _WORKFLOW_KEYS: tuple[str, ...] = (
+        # Refund
+        "dispute_stage", "pre_dispute_type", "merchant_risk_level",
+        "monitoring_program_status", "payout_frozen", "reserve_percent",
+        "payout_delay_days", "dispute_evidence_fields",
+        # Invoice
+        "match_status", "variance_amount", "payment_hold",
+        "credit_memo_status", "payment_batch_status",
+        "secondary_approval_required",
+        # KYC
+        "kyc_complete", "sanctions_status", "ofac_report_status",
+        "edd_status", "beneficial_owner_status", "payments_frozen",
+        "correction_fields",
+    )
+
     def _render_observation(self, obs: OpsArenaObservation, prefix: str | None = None) -> str:
+        """Render a compact, token-efficient observation.
+
+        Omits benchmark_score (reward-only signal) and verbose fields the model
+        does not need. Shows obligations so the model knows what remains.
+        """
         lines: list[str] = []
         if prefix:
             lines.append(prefix)
-        lines.extend(
-            [
-                f"clock: {obs.clock}",
-                f"done: {str(obs.done).lower()}",
-                f"benchmark_score: {self.benchmark_score:.3f}",
-                f"legacy_objective_score: {self.legacy_objective_score:.3f}",
-                f"invalid_actions: {self.invalid_action_count}",
-                f"available_actions: {', '.join(obs.available_actions) if obs.available_actions else 'none'}",
-            ]
-        )
-        if obs.system_message:
-            lines.append(f"system_message: {obs.system_message}")
+        lines.append(f"clock={obs.clock} done={str(obs.done).lower()}")
         if obs.error:
-            lines.append(f"error: {obs.error}")
+            lines.append(f"ERROR: {obs.error}")
+        elif obs.system_message:
+            lines.append(f">> {obs.system_message}")
+        if obs.available_actions:
+            lines.append(f"actions: {', '.join(obs.available_actions)}")
         if obs.queue_view:
             lines.append("queue:")
             for item in obs.queue_view:
                 lines.append(
-                    f"- {item.case_id} | type={item.case_type} | priority={item.priority} "
-                    f"| sla_remaining_minutes={item.sla_remaining_minutes} | amount={item.amount} "
-                    f"| status={item.status} | summary={item.summary}"
+                    f"  {item.case_id} type={item.case_type} p={item.priority} "
+                    f"sla={item.sla_remaining_minutes}m ${item.amount} [{item.status}]"
                 )
         if obs.case_detail:
             detail = obs.case_detail
             state_case = self._get_case(detail.case_id)
             lines.append(
-                f"case_detail: {detail.case_id} | status={detail.status} | priority={detail.priority} "
-                f"| amount={detail.amount} | summary={detail.visible_summary}"
+                f"case: {detail.case_id} status={detail.status} p={detail.priority} "
+                f"${detail.amount}"
             )
-            lines.append(
-                "case_controls: "
-                f"requires_customer_notification={state_case.requires_customer_notification} | "
-                f"customer_notified={state_case.customer_notified} | "
-                f"qa_required={state_case.qa_required} | "
-                f"qa_status={getattr(state_case.qa_status, 'value', state_case.qa_status)}"
-            )
+            # Obligations: what must happen before close
+            obligations: list[str] = []
+            if state_case.requires_customer_notification and not state_case.customer_notified:
+                obligations.append("send_message")
+            if state_case.qa_required and getattr(state_case.qa_status, "value", state_case.qa_status) != "passed":
+                obligations.append(f"qa({getattr(state_case.qa_status, 'value', state_case.qa_status)})")
+            if state_case.resolution.value == "pending":
+                obligations.append("decide")
+            if obligations:
+                lines.append(f"obligations: {', '.join(obligations)}")
             if detail.visible_flags:
-                lines.append(f"visible_flags: {', '.join(detail.visible_flags)}")
-            if detail.required_checks:
-                lines.append(f"required_checks: {', '.join(detail.required_checks)}")
-            if detail.checks_completed:
-                lines.append(f"checks_completed: {', '.join(detail.checks_completed)}")
+                lines.append(f"flags: {', '.join(detail.visible_flags)}")
             if detail.linked_records:
-                linked = ", ".join(f"{record.record_type}:{record.record_id}" for record in detail.linked_records)
-                lines.append(f"linked_records: {linked}")
-            pending_events = [
-                f"{event.event_type}@{event.at_time}"
-                for event in self._env._state.scheduled_events
-                if event.case_id == detail.case_id
-            ]
-            if pending_events:
-                lines.append(f"pending_case_events: {', '.join(pending_events)}")
+                linked = ", ".join(f"{r.record_type}:{r.record_id}" for r in detail.linked_records)
+                lines.append(f"records: {linked}")
+            if self._env._state is not None:
+                pending_events = [
+                    f"{event.event_type}@{event.at_time}"
+                    for event in self._env._state.scheduled_events
+                    if event.case_id == detail.case_id
+                ]
+                if pending_events:
+                    lines.append(f"pending_events: {', '.join(pending_events)}")
             if detail.workflow_metadata:
-                public_keys = (
-                    "dispute_stage",
-                    "pre_dispute_type",
-                    "refund_execution_state",
-                    "merchant_risk_level",
-                    "monitoring_program_status",
-                    "reserve_percent",
-                    "payout_delay_days",
-                    "payout_frozen",
-                    "representment_due_at",
-                    "prearbitration_due_at",
-                    "approval_status",
-                    "dispute_evidence_fields",
-                    # Invoice keys
-                    "match_status",
-                    "variance_amount",
-                    "payment_hold",
-                    "payment_hold_reason",
-                    "credit_memo_status",
-                    "credit_memo_amount",
-                    "vendor_response_status",
-                    "po_change_status",
-                    "payment_batch_status",
-                    "payment_batch_id",
-                    "recovery_status",
-                    "duplicate_status",
-                    "secondary_approval_required",
-                    # KYC keys
-                    "kyc_stage",
-                    "kyc_complete",
-                    "verification_status",
-                    "sanctions_status",
-                    "screening_match_confidence",
-                    "ofac_report_status",
-                    "report_due_at",
-                    "edd_status",
-                    "edd_due_at",
-                    "beneficial_owner_status",
-                    "correction_fields",
-                    "requirements_due",
-                    "payments_frozen",
-                    "payment_freeze_reason",
-                )
-                compact_meta = {
-                    key: detail.workflow_metadata[key]
-                    for key in public_keys
-                    if key in detail.workflow_metadata
-                }
-                if compact_meta:
-                    lines.append(f"workflow_metadata: {compact_meta}")
+                wm = detail.workflow_metadata
+                parts = [f"{k}={wm[k]}" for k in self._WORKFLOW_KEYS if k in wm]
+                if parts:
+                    lines.append(f"workflow: {', '.join(parts)}")
         if obs.policy_result:
             policy = obs.policy_result
-            lines.append(f"policy_result: {policy.policy_id} | title={policy.title}")
-            lines.append(f"policy_description: {policy.description}")
+            lines.append(f"policy: {policy.policy_id} — {policy.title}")
             if policy.matched_actions:
-                lines.append(f"policy_matched_actions: {', '.join(policy.matched_actions)}")
+                lines.append(f"policy_actions: {', '.join(policy.matched_actions)}")
         if obs.record_view:
-            lines.append(f"record_view: {obs.record_view}")
+            lines.append(f"record: {obs.record_view}")
         return "\n".join(lines)

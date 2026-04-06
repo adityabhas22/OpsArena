@@ -102,7 +102,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="artifacts/refund-grpo")
     parser.add_argument("--num-examples", type=int, default=256)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
-    parser.add_argument("--max-steps", type=int, default=200)
+    parser.add_argument("--max-steps", type=int, default=600)
     parser.add_argument("--num-generations", type=int, default=4)
     parser.add_argument("--per-device-train-batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)

@@ -5,12 +5,19 @@ from typing import Any, Literal
 from opsarena.training._base_tool_env import BaseToolEnv
 
 AP_PAYMENT_RUN_SYSTEM_PROMPT = (
-    "You are an accounts payable analyst managing the payment batch lifecycle. "
-    "Use the tools to perform three-way matching, manage payment holds, "
-    "request credit memos and revised invoices, stop payments when needed, "
-    "record vendor refunds, write off small balances, follow AP policy, "
-    "send required communications, complete QA if needed, and close cases "
-    "only when the workflow is fully resolved."
+    "You are an accounts payable analyst managing the payment batch lifecycle.\n\n"
+    "RULES:\n"
+    "- Make exactly ONE tool call per turn. Use exact IDs from the observation.\n"
+    "- Workflow per case:\n"
+    "  1. list_queue → open_case\n"
+    "  2. view_record for invoice, purchase_order, receipt\n"
+    "  3. record_three_way_match\n"
+    "  4. query_policy before approve/reject\n"
+    "  5. Handle variance: request_credit_memo / write_off_small_balance / request_revised_invoice\n"
+    "  6. If duplicate: remove_from_payment_batch or stop_payment → reject\n"
+    "  7. approve or reject → send_message if required → QA if required → close_case\n"
+    "- Check 'obligations' line to see what remains before close.\n"
+    "- Be concise. Do not explain your reasoning at length."
 )
 
 
@@ -42,46 +49,50 @@ def ap_payment_terminal_benchmark_reward(
     log_metric: Any | None = None,
     **_: Any,
 ) -> list[float]:
-    """Scores AP payment run trajectories with progress shaping + terminal benchmark bonus.
+    """Scores AP payment run trajectories with grader-aligned milestones + terminal bonus.
 
     Reward budget:
-      - tool shaping:       0.0 - 0.15
-      - cases resolved:     0.0 - 0.15
-      - progress shaping:   0.0 - 0.10
-      - terminal bonus:     0.0 - 0.60
-      - invalid penalty:    up to -0.10
+      - milestone shaping:  0.0 - 0.25  (grader-aligned process milestones)
+      - terminal bonus:     0.0 - 0.70  (benchmark_score * 0.70 if done)
+      - step cost:          0.0 - 0.05  (0.004 per step beyond 15)
+      - invalid penalty:    0.0 - 0.10
       Total range:          0.0 - 1.0
     """
     rewards: list[float] = []
     done_count = 0
     total_tool_calls = 0
     invalid_count = 0
+    total_milestones_hit = 0
+    total_milestones = 0
 
     for env in environments:
         done = env.done
         done_count += int(done)
         invalid_count += env.invalid_action_count
-        valid_tools = max(env.tool_call_count - env.invalid_action_count, 0)
         total_tool_calls += env.tool_call_count
 
-        tool_shaping = min(valid_tools * 0.02, 0.15)
-        cases_resolved_shaping = min(env.cases_resolved * 0.10, 0.15)
-        progress_shaping = min(env.benchmark_score * 0.10, 0.10)
-        terminal = env.benchmark_score * 0.60 if done else 0.0
+        milestone_score, milestones = env.milestone_score(cap=0.25)
+        total_milestones_hit += sum(1 for v in milestones.values() if v)
+        total_milestones += len(milestones)
+
+        terminal = env.benchmark_score * 0.70 if done else 0.0
+        step_cost = min(max(0, env.tool_call_count - 15) * 0.004, 0.05)
         invalid_penalty = min(env.invalid_action_count, 5) * 0.02
 
-        reward = tool_shaping + cases_resolved_shaping + progress_shaping + terminal - invalid_penalty
+        reward = milestone_score + terminal - step_cost - invalid_penalty
         rewards.append(max(0.0, min(1.0, reward)))
 
     if log_metric is not None and environments:
         count = len(environments)
         mean_benchmark = sum(env.benchmark_score for env in environments) / count
         mean_reward = sum(rewards) / count
+        milestone_rate = total_milestones_hit / max(1, total_milestones)
         log_metric("env/ap_payment_done_rate", done_count / count)
         log_metric("env/ap_payment_invalid_actions_mean", invalid_count / count)
         log_metric("env/ap_payment_tool_calls_mean", total_tool_calls / count)
         log_metric("env/ap_payment_benchmark_score_mean", mean_benchmark)
         log_metric("env/ap_payment_reward_mean", mean_reward)
+        log_metric("env/ap_payment_milestone_rate", milestone_rate)
         log_metric("env/ap_payment_terminal_score_mean", mean_reward)
 
     return rewards

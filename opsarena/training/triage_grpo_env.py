@@ -6,12 +6,18 @@ from opsarena.domain.workflows.refund import PrearbitrationDecision
 from opsarena.training.invoice_kyc_grpo_env import InvoiceKYCToolEnv
 
 QUEUE_TRIAGE_SYSTEM_PROMPT = (
-    "You are a senior operations supervisor managing a multi-case queue that spans "
-    "refund exceptions, invoice disputes, and KYC verifications. Prioritize the queue "
-    "by SLA urgency and financial exposure. Use triage tools to reorder, rebalance, "
-    "and batch-assign work. Open individual cases to perform domain-specific actions "
-    "(refund, invoice, KYC) as needed. Close every case whose workflow is fully "
-    "resolved, and escalate when frontline resolution is insufficient."
+    "You are a senior operations supervisor managing a multi-case queue spanning "
+    "refund exceptions, invoice disputes, and KYC verifications.\n\n"
+    "RULES:\n"
+    "- Make exactly ONE tool call per turn.\n"
+    "- Use exact IDs from the observation. Never invent IDs.\n"
+    "- First: list_queue → batch_reorder or rebalance_queue to triage\n"
+    "- Then process cases one by one: open_case → resolve → close_case\n"
+    "- For each case follow domain workflow (see obligations line)\n"
+    "- query_policy before any approve/reject decision\n"
+    "- send_message if requires_customer_notification, QA if qa_required\n"
+    "- Close every resolved case. Move to next case promptly.\n"
+    "- Be concise. Do not explain your reasoning at length."
 )
 
 
@@ -44,18 +50,16 @@ def queue_triage_terminal_benchmark_reward(
     log_metric: Any | None = None,
     **_: Any,
 ) -> list[float]:
-    """Scores queue-triage trajectories with progress shaping + terminal benchmark bonus.
+    """Scores queue-triage trajectories with grader-aligned milestones + terminal bonus.
 
-    Multi-case episodes benefit heavily from the cases_resolved bonus, which
-    encourages the agent to close 4-5 cases per episode rather than
-    over-investing in a single case.
+    Multi-case episodes get per-case milestone credit so the agent is rewarded
+    for resolving each case correctly, not just calling tools.
 
     Reward budget:
-      - tool shaping:       0.0 - 0.15
-      - cases resolved:     0.0 - 0.15
-      - progress shaping:   0.0 - 0.10
-      - terminal bonus:     0.0 - 0.60
-      - invalid penalty:    up to -0.10
+      - milestone shaping:  0.0 - 0.25  (grader-aligned process milestones)
+      - terminal bonus:     0.0 - 0.70  (benchmark_score * 0.70 if done)
+      - step cost:          0.0 - 0.05  (0.003 per step beyond 20)
+      - invalid penalty:    0.0 - 0.10
       Total range:          0.0 - 1.0
     """
     rewards: list[float] = []
@@ -63,34 +67,40 @@ def queue_triage_terminal_benchmark_reward(
     total_tool_calls = 0
     invalid_count = 0
     total_cases_resolved = 0
+    total_milestones_hit = 0
+    total_milestones = 0
 
     for env in environments:
         done = env.done
         done_count += int(done)
         invalid_count += env.invalid_action_count
-        valid_tools = max(env.tool_call_count - env.invalid_action_count, 0)
         total_tool_calls += env.tool_call_count
         total_cases_resolved += env.cases_resolved
 
-        tool_shaping = min(valid_tools * 0.02, 0.15)
-        cases_resolved_shaping = min(env.cases_resolved * 0.10, 0.15)
-        progress_shaping = min(env.benchmark_score * 0.10, 0.10)
-        terminal = env.benchmark_score * 0.60 if done else 0.0
+        milestone_score, milestones = env.milestone_score(cap=0.25)
+        total_milestones_hit += sum(1 for v in milestones.values() if v)
+        total_milestones += len(milestones)
+
+        terminal = env.benchmark_score * 0.70 if done else 0.0
+        # Triage has more cases, so allow more steps before cost kicks in
+        step_cost = min(max(0, env.tool_call_count - 20) * 0.003, 0.05)
         invalid_penalty = min(env.invalid_action_count, 5) * 0.02
 
-        reward = tool_shaping + cases_resolved_shaping + progress_shaping + terminal - invalid_penalty
+        reward = milestone_score + terminal - step_cost - invalid_penalty
         rewards.append(max(0.0, min(1.0, reward)))
 
     if log_metric is not None and environments:
         count = len(environments)
         mean_benchmark = sum(env.benchmark_score for env in environments) / count
         mean_reward = sum(rewards) / count
+        milestone_rate = total_milestones_hit / max(1, total_milestones)
         log_metric("env/triage_done_rate", done_count / count)
         log_metric("env/triage_invalid_actions_mean", invalid_count / count)
         log_metric("env/triage_tool_calls_mean", total_tool_calls / count)
         log_metric("env/triage_cases_resolved_mean", total_cases_resolved / count)
         log_metric("env/triage_benchmark_score_mean", mean_benchmark)
         log_metric("env/triage_reward_mean", mean_reward)
+        log_metric("env/triage_milestone_rate", milestone_rate)
         log_metric("env/triage_terminal_score_mean", mean_reward)
 
     return rewards
