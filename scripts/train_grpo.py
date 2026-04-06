@@ -104,11 +104,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Unified GRPO training for all OpsArena tasks.")
     parser.add_argument("--task-id", required=True, choices=list(TASK_REGISTRY.keys()),
                         help="Which task to train on.")
-    parser.add_argument("--model", required=True, help="Base model, e.g. Qwen/Qwen3-4B-Instruct-2507.")
+    parser.add_argument("--model", required=True, help="Base model or merged SFT adapter path.")
+    parser.add_argument("--tokenizer", default=None,
+                        help="Tokenizer model ID (defaults to --model). Use original model ID when --model is a merged local path.")
     parser.add_argument("--output-dir", default=None,
                         help="Output dir (default: artifacts/<task-id>-grpo).")
     parser.add_argument("--num-examples", type=int, default=256)
-    parser.add_argument("--learning-rate", type=float, default=1e-5)
+    parser.add_argument("--learning-rate", type=float, default=1e-6)
     parser.add_argument("--max-steps", type=int, default=None,
                         help="Training steps (default: per-task).")
     parser.add_argument("--num-generations", type=int, default=4)
@@ -152,7 +154,8 @@ def main() -> None:
 
     train_dataset = Dataset.from_list(task_cfg["dataset_fn"](args.num_examples))
     config = _build_grpo_config(args, GRPOConfig)
-    processing_class = prepare_tokenizer_for_grpo(args.model)
+    tokenizer_id = args.tokenizer or args.model
+    processing_class = prepare_tokenizer_for_grpo(tokenizer_id)
 
     env_cls = task_cfg["env_cls"]
     trainer = GRPOTrainer(
