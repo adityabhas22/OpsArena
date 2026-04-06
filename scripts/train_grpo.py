@@ -28,6 +28,7 @@ from opsarena.training import (
     refund_terminal_benchmark_reward,
 )
 from opsarena.training.cuda_lib_path import prepend_nvidia_cuda_runtime_lib_path
+from opsarena.training.json_logger import JSONMetricsLogger
 from opsarena.training.trl_tokenizer import prepare_tokenizer_for_grpo
 
 # Per-task defaults: (env_class, reward_fn, dataset_builder, default_max_completion, default_max_steps)
@@ -164,6 +165,7 @@ def main() -> None:
         args=config,
         environment_factory=partial(env_cls, random_seed=args.seed),
     )
+    trainer.add_callback(JSONMetricsLogger(output_dir=args.output_dir))
     trainer.train()
     trainer.save_model(args.output_dir)
 
