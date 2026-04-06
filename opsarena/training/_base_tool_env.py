@@ -440,6 +440,24 @@ class BaseToolEnv:
             lines.append(f"ERROR: {obs.error}")
         elif obs.system_message:
             lines.append(f">> {obs.system_message}")
+        # Queue-level metrics (critical for triage decisions)
+        if self._env._state is not None:
+            qs = self._env._state.queue_state()
+            open_count = len([c for c in self._env._state.cases.values() if c.status != "closed"])
+            closed_count = len(self._env._state.cases) - open_count
+            if open_count > 0 or closed_count > 0:
+                parts = [f"open={open_count}", f"closed={closed_count}"]
+                if qs.unassigned_count > 0:
+                    parts.append(f"unassigned={qs.unassigned_count}")
+                if qs.overdue_follow_ups > 0:
+                    parts.append(f"overdue_followups={qs.overdue_follow_ups}")
+                if qs.total_sla_breaches > 0:
+                    parts.append(f"sla_breaches={qs.total_sla_breaches}")
+                next_events = self._env._state.scheduled_events
+                if next_events:
+                    next_time = min(e.at_time for e in next_events)
+                    parts.append(f"next_event_at={next_time}")
+                lines.append(f"queue_status: {', '.join(parts)}")
         if obs.available_actions:
             lines.append(f"actions: {', '.join(obs.available_actions)}")
         if obs.queue_view:

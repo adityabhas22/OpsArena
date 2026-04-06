@@ -7,17 +7,24 @@ from opsarena.training.invoice_kyc_grpo_env import InvoiceKYCToolEnv
 
 QUEUE_TRIAGE_SYSTEM_PROMPT = (
     "You are a senior operations supervisor managing a multi-case queue spanning "
-    "refund exceptions, invoice disputes, and KYC verifications.\n\n"
+    "refund exceptions, invoice disputes, and KYC verifications. "
+    "You MUST call tools repeatedly until ALL cases are closed. Do NOT stop early.\n\n"
+    "TRIAGE STRATEGY:\n"
+    "1. list_queue to see all cases, priorities, and SLA deadlines\n"
+    "2. rebalance_queue if unassigned > 0\n"
+    "3. Process cases by SLA urgency — resolve cases closest to SLA breach first\n"
+    "4. For each case: open_case → query_policy → domain action → close_case\n"
+    "5. If pending_events shown, advance_clock to receive them before proceeding\n"
+    "6. After closing a case, immediately open the next highest-priority case\n\n"
+    "PER-CASE WORKFLOWS:\n"
+    "- REFUND: open → query_policy → approve/reject/challenge_dispute → send_message → QA → close\n"
+    "- INVOICE: open → view_record(invoice,PO) → query_policy → three_way_match → approve/reject → close\n"
+    "- KYC: open → run_sanctions_screen → review_kyc → approve/reject → close\n\n"
     "RULES:\n"
-    "- Make exactly ONE tool call per turn.\n"
     "- Use exact IDs from the observation. Never invent IDs.\n"
-    "- First: list_queue → batch_reorder or rebalance_queue to triage\n"
-    "- Then process cases one by one: open_case → resolve → close_case\n"
-    "- For each case follow domain workflow (see obligations line)\n"
-    "- query_policy before any approve/reject decision\n"
-    "- send_message if requires_customer_notification, QA if qa_required\n"
-    "- Close every resolved case. Move to next case promptly.\n"
-    "- Be concise. Do not explain your reasoning at length."
+    "- Check queue_status line: resolve unassigned cases, prevent SLA breaches.\n"
+    "- Check obligations line: complete all obligations before close_case.\n"
+    "- Keep calling tools until done=true."
 )
 
 
@@ -32,9 +39,9 @@ def build_queue_triage_prompt_dataset(num_examples: int = 256) -> list[dict[str,
                     {
                         "role": "user",
                         "content": (
-                            "Manage the mixed operations queue. Triage, prioritize, and resolve "
-                            f"as many cases as possible. Training sample {idx + 1}. "
-                            "Maximize final benchmark score."
+                            "Resolve ALL cases in the queue by calling tools step by step. "
+                            "Triage by SLA urgency, process each case through its domain workflow, "
+                            "close every case. Do not stop until all cases are closed."
                         ),
                     },
                 ]
