@@ -109,16 +109,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True, help="Base chat model, for example Qwen/Qwen3-4B-Instruct-2507.")
     parser.add_argument("--output-dir", default="artifacts/refund-grpo")
     parser.add_argument("--num-examples", type=int, default=256)
-    parser.add_argument("--learning-rate", type=float, default=1e-5)
+    parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--max-steps", type=int, default=600)
     parser.add_argument("--num-generations", type=int, default=4)
     parser.add_argument("--per-device-train-batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
     parser.add_argument("--max-prompt-length", type=int, default=2048)
-    parser.add_argument("--max-completion-length", type=int, default=2048)
+    parser.add_argument("--max-completion-length", type=int, default=3072)
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--lora-r", type=int, default=32)
     parser.add_argument("--lora-alpha", type=int, default=64)
+    parser.add_argument("--resume-from-checkpoint", default=None,
+                        help="Path to a checkpoint dir to resume from (e.g. artifacts/refund-grpo-v2/checkpoint-50).")
     parser.add_argument(
         "--use-vllm",
         action="store_true",
@@ -169,7 +171,7 @@ def main() -> None:
         environment_factory=partial(RefundExceptionToolEnv, random_seed=args.seed),
     )
     trainer.add_callback(JSONMetricsLogger(output_dir=args.output_dir))
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
     trainer.save_model(args.output_dir)
 
 
