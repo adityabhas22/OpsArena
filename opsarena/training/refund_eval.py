@@ -45,27 +45,51 @@ def _invoke_tool(env: RefundExceptionToolEnv, tool: str, arguments: dict[str, An
 
 
 def _parse_tool_json(text: str) -> tuple[str, dict[str, Any]] | None:
-    """Extract a single {\"tool\": ..., \"arguments\": ...} object from model output."""
+    """Extract a tool call from model output.
+
+    Supports three formats:
+    1. Eval JSON:     {"tool": "open_case", "arguments": {"case_id": "c1"}}
+    2. Qwen3 native:  <tool_call>{"name": "open_case", "arguments": {"case_id": "c1"}}</tool_call>
+    3. Generic JSON:  {"name": "open_case", "arguments": {"case_id": "c1"}}
+    """
+    import re
 
     def _try_load(s: str) -> tuple[str, dict[str, Any]] | None:
         try:
             obj = json.loads(s)
         except json.JSONDecodeError:
             return None
-        if not isinstance(obj, dict) or "tool" not in obj:
+        if not isinstance(obj, dict):
             return None
-        args = obj.get("arguments") or {}
+        # Accept both "tool" and "name" keys
+        t = obj.get("tool") or obj.get("name")
+        if not isinstance(t, str):
+            return None
+        args = obj.get("arguments") or obj.get("parameters") or {}
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                return None
         if not isinstance(args, dict):
             return None
-        t = obj["tool"]
-        if isinstance(t, str):
-            return t, args
-        return None
+        return t, args
 
     raw = text.strip()
+
+    # Try extracting from <tool_call>...</tool_call> blocks (Qwen3 native format)
+    tool_call_match = re.search(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", raw, re.DOTALL)
+    if tool_call_match:
+        hit = _try_load(tool_call_match.group(1))
+        if hit:
+            return hit
+
+    # Try the full text as JSON
     hit = _try_load(raw)
     if hit:
         return hit
+
+    # Try extracting first JSON object
     start = raw.find("{")
     end = raw.rfind("}")
     if start >= 0 and end > start:
@@ -79,10 +103,12 @@ def _build_system_prompt() -> str:
     tools = ", ".join(_refund_tool_names())
     return (
         REFUND_GRPO_SYSTEM_PROMPT
-        + "\n\nYou must respond with exactly one JSON object per turn and no other text.\n"
-        'Format: {"tool": "<name>", "arguments": { ... }}\n'
+        + "\n\nRespond with a tool call each turn. Accepted formats:\n"
+        '{"tool": "<name>", "arguments": { ... }}\n'
+        "or\n"
+        '<tool_call>{"name": "<name>", "arguments": { ... }}</tool_call>\n'
         f"Valid tool names: {tools}\n"
-        "Use empty arguments {} when there are no parameters."
+        "Use empty arguments {{}} when there are no parameters."
     )
 
 
@@ -151,8 +177,9 @@ def run_refund_episode_local(
         if parsed is None:
             parse_failures += 1
             feedback = (
-                "Invalid response. Reply with exactly one JSON object: "
-                '{"tool": "<name>", "arguments": { ... }}'
+                "Invalid response. Reply with a tool call. Format: "
+                '{"tool": "<name>", "arguments": { ... }} '
+                'or <tool_call>{"name": "<name>", "arguments": { ... }}</tool_call>'
             )
             messages.append({"role": "user", "content": feedback})
             continue
