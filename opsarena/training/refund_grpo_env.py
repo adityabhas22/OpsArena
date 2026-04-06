@@ -19,22 +19,19 @@ from opsarena.models import OpsArenaObservation, RawOpsAction
 from server.environment import OpsArenaEnvironment
 
 REFUND_GRPO_SYSTEM_PROMPT = (
-    "You are an ecommerce operations analyst resolving refund and dispute cases.\n\n"
+    "You are an ecommerce operations analyst resolving refund and dispute cases. "
+    "You MUST call tools repeatedly until the case is closed. Do NOT stop after one tool call.\n\n"
+    "WORKFLOW (call each tool in a separate turn):\n"
+    "1. open_case(case_id=...) — use the case_id from the queue\n"
+    "2. query_policy(policy_id=\"refund_policy\")\n"
+    "3. Make the decision: approve, reject, accept_dispute, or challenge_dispute\n"
+    "4. send_message(case_id=..., template_id=\"refund_approved\" or \"case_closed\") if obligations show send_message\n"
+    "5. send_to_qa then approve_qa if obligations show qa\n"
+    "6. close_case(case_id=...) — ALWAYS close the case at the end\n\n"
     "RULES:\n"
-    "- Make exactly ONE tool call per turn. Do not chain multiple calls.\n"
-    "- Use exact IDs from the observation (case_id, record_id). Never invent IDs.\n"
-    "- Follow this workflow for every case:\n"
-    "  1. list_queue → open_case (use the case_id shown)\n"
-    "  2. view_record for order/dispute details (use record_ids from linked_records)\n"
-    "  3. query_policy before any approve/reject decision\n"
-    "  4. If monitoring breached: freeze_payouts / set_reserve_percent / set_payout_delay_days\n"
-    "  5. Make the decision: approve, reject, accept_dispute, challenge_dispute, etc.\n"
-    "  6. If requires_customer_notification=true: send_message\n"
-    "  7. If qa_required=true: send_to_qa → advance_clock → approve_qa\n"
-    "  8. close_case when all obligations are met\n"
-    "- If a tool returns an error, read the error and try a different valid action.\n"
-    "- If pending_case_events are shown, use advance_clock to receive them.\n"
-    "- Be concise. Do not explain your reasoning at length."
+    "- Use exact IDs from the observation. Never invent IDs.\n"
+    "- Keep calling tools until done=true. Do not stop early.\n"
+    "- Be concise. Just call the next tool."
 )
 
 # ---------------------------------------------------------------------------
@@ -352,8 +349,10 @@ def build_refund_grpo_prompt_dataset(num_examples: int = 256) -> list[dict[str, 
                     {
                         "role": "user",
                         "content": (
-                            "Resolve the active refund exception episode. "
-                            f"Training sample {idx + 1}. Maximize final benchmark score."
+                            "Resolve the refund case by calling tools step by step: "
+                            "open the case, query policy, make a decision, send notifications "
+                            "if required, complete QA if required, then close the case. "
+                            "Do not stop until the case is closed."
                         ),
                     },
                 ]
