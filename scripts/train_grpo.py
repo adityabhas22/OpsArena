@@ -89,7 +89,10 @@ def _build_grpo_config(args: argparse.Namespace, GRPOConfig: type) -> object:
         candidate["vllm_max_model_length"] = args.max_prompt_length + args.max_completion_length + 256
 
     default_gen_batch = args.per_device_train_batch_size * args.gradient_accumulation_steps
-    if default_gen_batch < args.num_generations:
+    if default_gen_batch % args.num_generations != 0:
+        multiples = (default_gen_batch + args.num_generations - 1) // args.num_generations
+        candidate["generation_batch_size"] = multiples * args.num_generations
+    elif default_gen_batch < args.num_generations:
         candidate["generation_batch_size"] = args.num_generations
 
     valid = {f.name for f in fields(GRPOConfig)}

@@ -34,6 +34,9 @@ def main() -> None:
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--lora-r", type=int, default=32)
     parser.add_argument("--lora-alpha", type=int, default=64)
+    parser.add_argument("--max-seq-length", type=int, default=8192)
+    parser.add_argument("--per-device-train-batch-size", type=int, default=1)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
     args = parser.parse_args()
 
     prepend_nvidia_cuda_runtime_lib_path()
@@ -59,13 +62,13 @@ def main() -> None:
         "output_dir": args.output_dir + "-lora",
         "num_train_epochs": args.epochs,
         "learning_rate": args.learning_rate,
-        "per_device_train_batch_size": 4,
-        "gradient_accumulation_steps": 2,
+        "per_device_train_batch_size": args.per_device_train_batch_size,
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "logging_steps": 5,
         "save_strategy": "no",
         "report_to": [],
-        "max_length": 4096,
-        "max_seq_length": 4096,
+        "max_length": args.max_seq_length,
+        "max_seq_length": args.max_seq_length,
     }
     valid = {f.name for f in fields(SFTConfig)}
     filtered = {k: v for k, v in candidate.items() if k in valid}

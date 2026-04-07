@@ -4,6 +4,9 @@ import random
 from collections.abc import Iterable
 from typing import Any, Literal
 
+from opsarena.domain.workflows.invoice import InvoiceWorkflowState
+from opsarena.domain.workflows.kyc import EDDStatus, KYCWorkflowState
+from opsarena.domain.workflows.refund import RefundWorkflowState
 from opsarena.enums import RecordType, RecordType as _RT
 from opsarena.models import OpsArenaObservation, RawOpsAction
 from server.environment import OpsArenaEnvironment
@@ -16,6 +19,22 @@ class BaseToolEnv:
     while this base provides queue navigation, observation rendering, and the
     common lifecycle actions that every task needs.
     """
+
+    VISIBLE_ACTIONS: tuple[str, ...] = (
+        "list_queue",
+        "open_case",
+        "view_record",
+        "query_policy",
+        "approve",
+        "reject",
+        "escalate",
+        "request_info",
+        "send_message",
+        "send_to_qa",
+        "approve_qa",
+        "close_case",
+        "advance_clock",
+    )
 
     def __init__(
         self,
@@ -30,6 +49,9 @@ class BaseToolEnv:
         self._seed_sequence = iter(seed_sequence) if seed_sequence is not None else None
         self._last_observation: OpsArenaObservation | None = None
         self._last_seed: int | None = None
+        self._initial_case_count: int = 0
+        self._initial_unassigned_count: int = 0
+        self._initial_efficiency_score: float = 0.0
 
     # ------------------------------------------------------------------
     # Properties
@@ -67,6 +89,18 @@ class BaseToolEnv:
             return 0
         return self._env._state.metrics.cases_resolved
 
+    @property
+    def initial_case_count(self) -> int:
+        return self._initial_case_count
+
+    @property
+    def initial_unassigned_count(self) -> int:
+        return self._initial_unassigned_count
+
+    @property
+    def initial_efficiency_score(self) -> float:
+        return self._initial_efficiency_score
+
     # ------------------------------------------------------------------
     # Reset
     # ------------------------------------------------------------------
@@ -84,6 +118,17 @@ class BaseToolEnv:
         )
         self._last_seed = seed
         self._last_observation = self._env.reset(task_id=self._task_id, seed=seed)
+        state = self._env._state
+        if state is not None:
+            from opsarena.engine.graders import grade_efficiency
+
+            self._initial_case_count = len(state.cases)
+            self._initial_unassigned_count = state.queue_state().unassigned_count
+            self._initial_efficiency_score = grade_efficiency(state)
+        else:
+            self._initial_case_count = 0
+            self._initial_unassigned_count = 0
+            self._initial_efficiency_score = 0.0
         return self._render_observation(
             self._last_observation,
             prefix=f"{self._task_id} episode started with seed {seed}",
@@ -194,6 +239,10 @@ class BaseToolEnv:
             "customer_request",
             "duplicate_match",
             "invalid_document",
+            "sanctions_match",
+            "beneficial_owner_mismatch",
+            "edd_required",
+            "reporting_required",
         ],
         notes: str | None = None,
     ) -> str:
@@ -359,10 +408,11 @@ class BaseToolEnv:
     # ------------------------------------------------------------------
 
     def _milestone_score(self, cap: float = 0.25) -> tuple[float, dict[str, bool]]:
-        """Compute grader-aligned milestone shaping from the audit trail.
+        """Compute milestone shaping from action-earned or conditionally required progress.
 
-        Each milestone corresponds to a process check the grader actually scores,
-        ensuring shaping points in the same direction as the terminal benchmark.
+        Passive defaults like "notification not required" intentionally do not
+        earn reward. The baseline at reset should be zero, and milestones should
+        only become true after the agent performs useful work.
 
         Returns (score_capped_at_cap, milestone_dict).
         """
@@ -382,13 +432,35 @@ class BaseToolEnv:
             milestones[f"{cid}/opened"] = "open_case" in events
             milestones[f"{cid}/policy_queried"] = "query_policy" in events
             milestones[f"{cid}/decision_made"] = case.resolution.value != "pending"
-            milestones[f"{cid}/notified"] = (
-                not case.requires_customer_notification or case.customer_notified
-            )
-            milestones[f"{cid}/qa_done"] = (
-                not case.qa_required or "approve_qa" in events
-            )
             milestones[f"{cid}/closed"] = case.status == "closed"
+
+            if case.requires_customer_notification:
+                milestones[f"{cid}/notified"] = case.customer_notified
+            if case.qa_required:
+                milestones[f"{cid}/qa_done"] = "approve_qa" in events
+
+            workflow = case.workflow
+            if isinstance(workflow, InvoiceWorkflowState):
+                milestones[f"{cid}/match_recorded"] = "record_three_way_match" in events
+                if workflow.secondary_approval_required or "send_for_secondary_approval" in events:
+                    milestones[f"{cid}/secondary_approval"] = "send_for_secondary_approval" in events
+            elif isinstance(workflow, KYCWorkflowState):
+                milestones[f"{cid}/sanctions_screened"] = "run_sanctions_screen" in events
+                milestones[f"{cid}/kyc_reviewed"] = "review_kyc" in events
+                if workflow.edd_status != EDDStatus.NOT_REQUIRED or getattr(case.hidden, "true_beneficial_owner_issue", False):
+                    milestones[f"{cid}/edd_started"] = "start_edd_review" in events
+                if getattr(case.hidden, "true_beneficial_owner_issue", False):
+                    milestones[f"{cid}/beneficial_owner_reviewed"] = "review_beneficial_owner" in events
+                if getattr(case.hidden, "true_sanctions_match", False):
+                    milestones[f"{cid}/payments_frozen"] = "freeze_payments" in events
+                if getattr(case.hidden, "true_ofac_report_required", False):
+                    milestones[f"{cid}/ofac_reported"] = "file_ofac_report" in events
+            elif isinstance(workflow, RefundWorkflowState):
+                if workflow.monitoring_program_status.value == "breached":
+                    milestones[f"{cid}/risk_control"] = any(
+                        evt in {"freeze_payouts", "set_reserve_percent", "set_payout_delay_days"}
+                        for evt in events
+                    )
 
         if not milestones:
             return 0.0, milestones
@@ -453,13 +525,32 @@ class BaseToolEnv:
                     parts.append(f"overdue_followups={qs.overdue_follow_ups}")
                 if qs.total_sla_breaches > 0:
                     parts.append(f"sla_breaches={qs.total_sla_breaches}")
+                staffing_status = self._env._state.metadata.get("staffing_status")
+                if staffing_status and staffing_status != "normal":
+                    parts.append(f"staffing={staffing_status}")
+                owner_loads: dict[str, int] = {}
+                for case in self._env._state.cases.values():
+                    if case.status == "closed":
+                        continue
+                    owner = case.current_owner
+                    if owner in {None, "queue", "ops_agent"}:
+                        continue
+                    owner_loads[owner] = owner_loads.get(owner, 0) + 1
+                if owner_loads:
+                    rendered_loads = ";".join(
+                        f"{owner}:{owner_loads[owner]}" for owner in sorted(owner_loads)
+                    )
+                    parts.append(f"loads={rendered_loads}")
                 next_events = self._env._state.scheduled_events
                 if next_events:
                     next_time = min(e.at_time for e in next_events)
                     parts.append(f"next_event_at={next_time}")
                 lines.append(f"queue_status: {', '.join(parts)}")
         if obs.available_actions:
-            lines.append(f"actions: {', '.join(obs.available_actions)}")
+            visible_actions = [a for a in obs.available_actions if a in self.VISIBLE_ACTIONS]
+            if not visible_actions:
+                visible_actions = list(obs.available_actions)
+            lines.append(f"actions: {', '.join(visible_actions)}")
         if obs.queue_view:
             lines.append("queue:")
             for item in obs.queue_view:

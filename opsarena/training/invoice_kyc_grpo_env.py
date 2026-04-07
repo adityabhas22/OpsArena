@@ -109,6 +109,29 @@ def invoice_kyc_terminal_benchmark_reward(
 class InvoiceKYCToolEnv(BaseToolEnv):
     """Combined invoice exception + KYC verification tool environment for GRPO."""
 
+    VISIBLE_ACTIONS = BaseToolEnv.VISIBLE_ACTIONS + (
+        "record_three_way_match",
+        "place_payment_hold",
+        "release_payment_hold",
+        "request_credit_memo",
+        "request_revised_invoice",
+        "request_po_change",
+        "remove_from_payment_batch",
+        "stop_payment",
+        "record_vendor_refund",
+        "apply_credit_memo",
+        "write_off_small_balance",
+        "send_for_secondary_approval",
+        "review_kyc",
+        "run_sanctions_screen",
+        "start_edd_review",
+        "review_beneficial_owner",
+        "request_field_correction",
+        "trigger_reverification",
+        "file_ofac_report",
+        "freeze_payments",
+    )
+
     def __init__(
         self,
         *,
@@ -355,6 +378,38 @@ class InvoiceKYCToolEnv(BaseToolEnv):
         """
         payload: dict[str, Any] = {
             "action_type": "write_off_small_balance",
+            "case_id": case_id,
+            "reason_code": reason_code,
+        }
+        if notes:
+            payload["notes"] = notes
+        return self._step(payload)
+
+    def send_for_secondary_approval(
+        self,
+        case_id: str,
+        reason_code: Literal[
+            "threshold_exceeded",
+            "suspicious_pattern",
+            "missing_documentation",
+            "policy_ambiguity",
+            "duplicate_match",
+            "invalid_document",
+        ] = "threshold_exceeded",
+        notes: str | None = None,
+    ) -> str:
+        """Request secondary approval for an invoice exception before approval.
+
+        Args:
+            case_id: Case identifier.
+            reason_code: Why secondary approval is required.
+            notes: Optional analyst notes.
+
+        Returns:
+            The updated case state after routing for secondary approval.
+        """
+        payload: dict[str, Any] = {
+            "action_type": "send_for_secondary_approval",
             "case_id": case_id,
             "reason_code": reason_code,
         }

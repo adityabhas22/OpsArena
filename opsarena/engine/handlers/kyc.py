@@ -209,6 +209,8 @@ def handle_request_field_correction(state: WorldState, action: RequestFieldCorre
     verification = _verification_record(state, case)
     workflow = require_kyc_workflow(case)
     allowed_fields = set(case.hidden.hidden_correction_fields) | set(workflow.correction_fields)
+    if verification.beneficial_owners and action.field_name.startswith("owners."):
+        allowed_fields.add(action.field_name)
     if action.field_name not in allowed_fields:
         raise ValueError("unknown_correction_field")
     if action.field_name in case.pending_info_fields:

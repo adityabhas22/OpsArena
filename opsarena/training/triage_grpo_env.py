@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
 from opsarena.domain.workflows.refund import PrearbitrationDecision
+from opsarena.engine.graders import grade_efficiency
 from opsarena.training.invoice_kyc_grpo_env import InvoiceKYCToolEnv
 
 QUEUE_TRIAGE_SYSTEM_PROMPT = (
@@ -22,6 +24,7 @@ QUEUE_TRIAGE_SYSTEM_PROMPT = (
     "- KYC: open → run_sanctions_screen → review_kyc → approve/reject → close\n\n"
     "RULES:\n"
     "- Use exact IDs from the observation. Never invent IDs.\n"
+    "- Make exactly ONE tool call per turn.\n"
     "- Check queue_status line: resolve unassigned cases, prevent SLA breaches.\n"
     "- Check obligations line: complete all obligations before close_case.\n"
     "- Keep calling tools until done=true."
@@ -57,17 +60,13 @@ def queue_triage_terminal_benchmark_reward(
     log_metric: Any | None = None,
     **_: Any,
 ) -> list[float]:
-    """Scores queue-triage trajectories with grader-aligned milestones + terminal bonus.
+    """Scores queue-triage trajectories with zero-baseline progress shaping.
 
-    Multi-case episodes get per-case milestone credit so the agent is rewarded
-    for resolving each case correctly, not just calling tools.
-
-    Reward budget:
-      - milestone shaping:  0.0 - 0.25  (grader-aligned process milestones)
-      - terminal bonus:     0.0 - 0.70  (benchmark_score * 0.70 if done)
-      - step cost:          0.0 - 0.05  (0.003 per step beyond 20)
-      - invalid penalty:    0.0 - 0.10
-      Total range:          0.0 - 1.0
+    The shaping is deliberately tied to things the agent must *do*:
+    opening and resolving cases, reducing unassigned backlog, and improving
+    queue efficiency from the reset state. This avoids the previous failure
+    mode where passive defaults at reset yielded positive reward and the model
+    learned to stop calling tools.
     """
     rewards: list[float] = []
     done_count = 0
@@ -76,25 +75,67 @@ def queue_triage_terminal_benchmark_reward(
     total_cases_resolved = 0
     total_milestones_hit = 0
     total_milestones = 0
+    total_terminal = 0.0
+    total_assignment_progress = 0.0
+    total_efficiency_gain = 0.0
+    no_tool_count = 0
+    malformed_count = 0
 
-    for env in environments:
+    for env, completion in zip(environments, completions, strict=True):
         done = env.done
         done_count += int(done)
         invalid_count += env.invalid_action_count
         total_tool_calls += env.tool_call_count
         total_cases_resolved += env.cases_resolved
 
-        milestone_score, milestones = env._milestone_score(cap=0.25)
+        milestone_score, milestones = env._milestone_score(cap=0.18)
         total_milestones_hit += sum(1 for v in milestones.values() if v)
         total_milestones += len(milestones)
 
-        terminal = env.benchmark_score * 0.70 if done else 0.0
+        state = env._env._state
+        case_count = env.initial_case_count or (len(state.cases) if state is not None else 1)
+        current_unassigned = state.queue_state().unassigned_count if state is not None else env.initial_unassigned_count
+        assignment_progress = max(0, env.initial_unassigned_count - current_unassigned) / max(1, env.initial_unassigned_count)
+        case_progress = env.cases_resolved / max(1, case_count)
+        efficiency_gain = 0.0
+        if state is not None:
+            efficiency_gain = max(0.0, grade_efficiency(state) - env.initial_efficiency_score)
+
+        completion_text = _stringify_completion(completion)
+        has_function_wrapper = "<function=" in completion_text and "</function>" in completion_text
+        has_tool_xml = "<tool_call>" in completion_text
+        malformed_tool_penalty = 0.05 if has_tool_xml and not has_function_wrapper else 0.0
+        no_tool_penalty = 0.08 if not done and env.tool_call_count == 0 else 0.0
+        stall_penalty = 0.05 if not done and env.cases_resolved == 0 and assignment_progress == 0.0 else 0.0
+        syntax_bonus = 0.01 if has_function_wrapper else 0.0
+        no_tool_count += int(no_tool_penalty > 0.0)
+        malformed_count += int(malformed_tool_penalty > 0.0)
+
+        progress_score = (
+            milestone_score
+            + 0.12 * case_progress
+            + 0.10 * assignment_progress
+            + 0.10 * efficiency_gain
+            + syntax_bonus
+        )
+        terminal = env.benchmark_score * 0.60 if done else 0.0
+        total_terminal += terminal
+        total_assignment_progress += assignment_progress
+        total_efficiency_gain += efficiency_gain
         # Triage has more cases, so allow more steps before cost kicks in
         step_cost = min(max(0, env.tool_call_count - 20) * 0.003, 0.05)
-        invalid_penalty = min(env.invalid_action_count, 5) * 0.02
+        invalid_penalty = min(env.invalid_action_count, 5) * 0.025
 
-        reward = milestone_score + terminal - step_cost - invalid_penalty
-        rewards.append(max(0.0, min(1.0, reward)))
+        reward = (
+            progress_score
+            + terminal
+            - step_cost
+            - invalid_penalty
+            - no_tool_penalty
+            - stall_penalty
+            - malformed_tool_penalty
+        )
+        rewards.append(max(-0.25, min(1.0, reward)))
 
     if log_metric is not None and environments:
         count = len(environments)
@@ -108,13 +149,49 @@ def queue_triage_terminal_benchmark_reward(
         log_metric("env/triage_benchmark_score_mean", mean_benchmark)
         log_metric("env/triage_reward_mean", mean_reward)
         log_metric("env/triage_milestone_rate", milestone_rate)
-        log_metric("env/triage_terminal_score_mean", mean_reward)
+        log_metric("env/triage_terminal_score_mean", total_terminal / count)
+        log_metric("env/triage_assignment_progress_mean", total_assignment_progress / count)
+        log_metric("env/triage_efficiency_gain_mean", total_efficiency_gain / count)
+        log_metric("env/triage_no_tool_rate", no_tool_count / count)
+        log_metric("env/triage_malformed_tool_rate", malformed_count / count)
 
     return rewards
 
 
+def _stringify_completion(completion: Any) -> str:
+    """Best-effort text extraction from TRL completion structures."""
+    if completion is None:
+        return ""
+    if isinstance(completion, str):
+        return completion
+    if isinstance(completion, dict):
+        content = completion.get("content")
+        if isinstance(content, list):
+            return "\n".join(_stringify_completion(item) for item in content)
+        if content is not None:
+            return str(content)
+        return json.dumps(completion, default=str)
+    if isinstance(completion, list):
+        return "\n".join(_stringify_completion(item) for item in completion)
+    return str(completion)
+
+
 class QueueTriageToolEnv(InvoiceKYCToolEnv):
     """Full multi-domain triage environment combining refund, invoice, KYC, and supervisor tools."""
+
+    VISIBLE_ACTIONS = InvoiceKYCToolEnv.VISIBLE_ACTIONS + (
+        "accept_dispute",
+        "challenge_dispute",
+        "submit_dispute_evidence",
+        "refund_pre_dispute_alert",
+        "resolve_prearbitration",
+        "freeze_payouts",
+        "set_reserve_percent",
+        "set_payout_delay_days",
+        "prioritize",
+        "batch_reorder",
+        "rebalance_queue",
+    )
 
     def __init__(
         self,
