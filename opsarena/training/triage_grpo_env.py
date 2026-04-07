@@ -84,7 +84,7 @@ def queue_triage_terminal_benchmark_reward(
         total_tool_calls += env.tool_call_count
         total_cases_resolved += env.cases_resolved
 
-        milestone_score, milestones = env.milestone_score(cap=0.25)
+        milestone_score, milestones = env._milestone_score(cap=0.25)
         total_milestones_hit += sum(1 for v in milestones.values() if v)
         total_milestones += len(milestones)
 

@@ -358,7 +358,7 @@ class BaseToolEnv:
     # Milestone scoring (shared across all reward functions)
     # ------------------------------------------------------------------
 
-    def milestone_score(self, cap: float = 0.25) -> tuple[float, dict[str, bool]]:
+    def _milestone_score(self, cap: float = 0.25) -> tuple[float, dict[str, bool]]:
         """Compute grader-aligned milestone shaping from the audit trail.
 
         Each milestone corresponds to a process check the grader actually scores,
