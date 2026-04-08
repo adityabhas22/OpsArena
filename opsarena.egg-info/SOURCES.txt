@@ -1,6 +1,7 @@
 README.md
 pyproject.toml
 baselines/__init__.py
+baselines/controller_inference.py
 baselines/openai_baseline.py
 baselines/oracle.py
 baselines/random_baseline.py
