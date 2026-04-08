@@ -297,27 +297,28 @@ def render_record_view(state: WorldState) -> dict | None:
     record_id = state.current_record_id
     if not record_type or not record_id:
         return None
-    if record_type == RecordType.ORDER:
-        return state.records.orders[record_id].model_dump()
-    if record_type == RecordType.CUSTOMER:
-        return state.records.customers[record_id].model_dump()
-    if record_type == RecordType.SHIPPING:
-        return state.records.shipping[record_id].model_dump()
-    if record_type == RecordType.PAYMENT:
-        return state.records.payments[record_id].model_dump()
-    if record_type == RecordType.DISPUTE:
-        return state.records.disputes[record_id].model_dump()
-    if record_type == RecordType.INVOICE:
-        return state.records.invoices[record_id].model_dump()
-    if record_type == RecordType.CREDIT_MEMO:
-        return state.records.credit_memos[record_id].model_dump()
-    if record_type == RecordType.PURCHASE_ORDER:
-        return state.records.purchase_orders[record_id].model_dump()
-    if record_type == RecordType.RECEIPT:
-        return state.records.receipts[record_id].model_dump()
-    if record_type == RecordType.KYC_DOCUMENT:
-        return state.records.kyc_verifications[record_id].model_dump()
-    return None
+    _STORE_MAP = {
+        RecordType.ORDER: "orders",
+        RecordType.CUSTOMER: "customers",
+        RecordType.SHIPPING: "shipping",
+        RecordType.PAYMENT: "payments",
+        RecordType.DISPUTE: "disputes",
+        RecordType.INVOICE: "invoices",
+        RecordType.CREDIT_MEMO: "credit_memos",
+        RecordType.PURCHASE_ORDER: "purchase_orders",
+        RecordType.RECEIPT: "receipts",
+        RecordType.KYC_DOCUMENT: "kyc_verifications",
+    }
+    store_attr = _STORE_MAP.get(record_type)
+    if store_attr is None:
+        return None
+    store = getattr(state.records, store_attr, {})
+    record = store.get(record_id)
+    if record is None:
+        state.current_record_type = None
+        state.current_record_id = None
+        return None
+    return record.model_dump()
 
 
 def render_policy_result(state: WorldState) -> PolicyResult | None:

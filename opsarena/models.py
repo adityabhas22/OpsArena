@@ -276,18 +276,13 @@ class RouteCaseAction(Action):
 
 
 class SendMessageAction(Action):
-    """Send a templated message to the customer. Requires template-specific slot values."""
+    """Send a templated message to the customer."""
     action_type: Literal["send_message"] = "send_message"
     case_id: str
     template_id: str = Field(description="Template to use: 'refund_approved', 'case_closed', or 'info_request'")
     slots: dict[str, str] = Field(
         default_factory=dict,
-        description=(
-            "Template variable key-value pairs. "
-            "refund_approved needs: {\"amount\": \"...\", \"order_id\": \"...\"}. "
-            "case_closed needs: {\"case_id\": \"...\", \"resolution\": \"...\"}. "
-            "info_request needs: {\"fields\": \"...\"}."
-        ),
+        description="Optional template variable overrides. Auto-filled from case data if omitted.",
     )
 
 

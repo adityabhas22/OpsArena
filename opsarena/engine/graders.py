@@ -10,11 +10,16 @@ from opsarena.enums import CaseType, Resolution, TaskId
 
 
 def _hard_gate(state: WorldState) -> float | None:
-    if state.metrics.compliance_violations > 0:
-        return 0.0
     if state.metrics.data_breach_count > 0:
         return 0.0
     return None
+
+
+def _compliance_penalty(state: WorldState) -> float:
+    """Heavy multiplier for compliance violations — preserves partial credit."""
+    if state.metrics.compliance_violations == 0:
+        return 1.0
+    return max(0.1, 1.0 - 0.3 * state.metrics.compliance_violations)
 
 
 def _case_outcome_score(case) -> float:
@@ -178,10 +183,12 @@ def grade_episode(state: WorldState) -> dict:
     outcome = grade_outcome(state)
     process = grade_trajectory(state)
     efficiency = grade_efficiency(state)
-    score = 0.5 * outcome + 0.3 * process + 0.2 * efficiency
+    raw_score = 0.5 * outcome + 0.3 * process + 0.2 * efficiency
+    score = raw_score * _compliance_penalty(state)
     return {
         "score": round(score, 6),
         "outcome": round(outcome, 6),
         "process": round(process, 6),
         "efficiency": round(efficiency, 6),
+        "compliance_penalty": round(_compliance_penalty(state), 6),
     }

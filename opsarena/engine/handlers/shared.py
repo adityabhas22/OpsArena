@@ -123,17 +123,31 @@ def handle_log_internal_note(state: WorldState, action: LogInternalNoteAction):
     return TransitionResult(True, f"Internal note logged for {case.case_id}"), case
 
 
+def _auto_fill_slots(case, template_id: str, provided: dict[str, str]) -> dict[str, str]:
+    """Fill missing template slots from case data when possible."""
+    slots = dict(provided)
+    defaults: dict[str, str] = {
+        "case_id": case.case_id,
+        "amount": str(case.amount) if case.amount else "0",
+        "resolution": case.resolution.value if hasattr(case.resolution, "value") else str(case.resolution),
+    }
+    if case.linked_records:
+        for rec in case.linked_records:
+            if rec.record_type in ("order",):
+                defaults["order_id"] = rec.record_id
+    if case.requested_info_fields:
+        defaults["fields"] = ", ".join(case.requested_info_fields)
+    for key, val in defaults.items():
+        if key not in slots:
+            slots[key] = val
+    return slots
+
+
 def handle_send_message(state: WorldState, action: SendMessageAction):
     case = require_case(state, action.case_id)
     template = state.records.message_templates[action.template_id]
-    missing = [s for s in template.required_slots if s not in action.slots]
-    if missing:
-        raise ValueError(
-            f"Missing required slots for template '{action.template_id}': "
-            f"{', '.join(missing)}. "
-            f"Pass slots={{{', '.join(repr(s) + ': ...' for s in template.required_slots)}}}"
-        )
-    body = template.body_template.format(**action.slots)
+    slots = _auto_fill_slots(case, action.template_id, action.slots)
+    body = template.body_template.format(**slots)
     case.communication_log.append(
         MessageLogEntry(
             timestamp=state.current_time,
