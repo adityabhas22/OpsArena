@@ -10,6 +10,12 @@ COPY scripts /app/scripts
 COPY configs /app/configs
 COPY data /app/data
 
+COPY inference.py /app/inference.py
+COPY openenv.yaml /app/openenv.yaml
+COPY __init__.py /app/__init__.py
+COPY client.py /app/client.py
+COPY models.py /app/models.py
+
 RUN pip install --no-cache-dir .
 
 EXPOSE 8000

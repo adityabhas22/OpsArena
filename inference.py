@@ -157,7 +157,7 @@ def format_end_line(
     success: bool, steps: int, score: float, rewards: list[float],
 ) -> str:
     rstr = ",".join(f"{r:.2f}" for r in rewards)
-    return f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rstr}"
+    return f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rstr}"
 
 
 def _log(line: str) -> None:
