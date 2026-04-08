@@ -58,6 +58,7 @@ ENV_BASE_URL = os.getenv("OPSARENA_ENV_URL", "http://localhost:8000")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
 HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 TASK_IDS = tuple(
     t.strip()
     for t in os.getenv(
@@ -332,25 +333,37 @@ def _add_tool_results(
 # LLM call
 # ---------------------------------------------------------------------------
 
+_OPENAI_NATIVE_PREFIXES = ("gpt-", "o1", "o3", "o4")
+
+
 def _call_llm(
     client: OpenAI,
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
 ) -> Any:
+    is_openai = MODEL_NAME.startswith(_OPENAI_NATIVE_PREFIXES)
     kwargs: dict[str, Any] = dict(
         model=MODEL_NAME,
         messages=_trim_messages(messages),
         tools=tools,
         tool_choice="required",
-        parallel_tool_calls=False,
         temperature=TEMPERATURE,
         stream=False,
     )
+    if is_openai:
+        kwargs["parallel_tool_calls"] = False
     if MODEL_NAME.startswith(("gpt-5", "o3", "o4")):
         kwargs["max_completion_tokens"] = MAX_TOKENS
     else:
         kwargs["max_tokens"] = MAX_TOKENS
-    return client.chat.completions.create(**kwargs)
+
+    try:
+        return client.chat.completions.create(**kwargs)
+    except Exception as first_err:
+        if "parallel_tool_calls" not in str(first_err):
+            raise
+        kwargs.pop("parallel_tool_calls", None)
+        return client.chat.completions.create(**kwargs)
 
 
 def _parse_tool_call(
@@ -421,7 +434,10 @@ def run_task(
     client: OpenAI,
     tool_map: dict[str, dict[str, Any]],
 ) -> float:
-    env = OpsArenaEnv(base_url=ENV_BASE_URL).sync()
+    if LOCAL_IMAGE_NAME:
+        env = OpsArenaEnv.from_docker_image(LOCAL_IMAGE_NAME).sync()
+    else:
+        env = OpsArenaEnv(base_url=ENV_BASE_URL).sync()
     rewards: list[float] = []
     steps_taken = 0
     final_score = 0.0
