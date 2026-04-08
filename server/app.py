@@ -17,7 +17,7 @@ app = create_app(
     RawOpsAction,
     OpsArenaObservation,
     env_name="opsarena",
-    max_concurrent_envs=int(os.getenv("OPSARENA_MAX_CONCURRENT_ENVS", "64")),
+    max_concurrent_envs=int(os.getenv("OPSARENA_MAX_CONCURRENT_ENVS", "64") or "64"),
 )
 
 

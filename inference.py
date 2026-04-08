@@ -57,7 +57,7 @@ BENCHMARK = os.getenv("OPSARENA_BENCHMARK", "opsarena")
 ENV_BASE_URL = os.getenv("OPSARENA_ENV_URL", "http://localhost:8000")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
-HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
+HF_TOKEN = os.getenv("HF_TOKEN")
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 TASK_IDS = tuple(
     t.strip()

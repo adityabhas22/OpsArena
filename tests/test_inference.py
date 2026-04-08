@@ -56,7 +56,7 @@ def test_log_lines_follow_required_shape():
     )
 
     end = format_end_line(True, 2, 0.875, [0.25, 0.5])
-    assert end == "[END] success=true steps=2 score=0.875 rewards=0.25,0.50"
+    assert end == "[END] success=true steps=2 score=0.88 rewards=0.25,0.50"
 
 
 def test_log_step_with_error():

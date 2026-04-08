@@ -72,7 +72,12 @@ def _load_template(task_id: TaskId) -> dict:
         TaskId.QUEUE_TRIAGE: ROOT / "data" / "scenario_templates" / "task3_triage" / "template.yaml",
         TaskId.AP_PAYMENT_RUN: ROOT / "data" / "scenario_templates" / "task4_ap_payment_run" / "template.yaml",
     }
-    return yaml.safe_load(mapping[task_id].read_text())
+    path = mapping.get(task_id)
+    if path is None:
+        raise ValueError(f"Unknown task_id: {task_id}")
+    if not path.exists():
+        raise FileNotFoundError(f"Template not found: {path}")
+    return yaml.safe_load(path.read_text())
 
 
 def _choose_factor(template: dict, rng: random.Random, name: str, default):
@@ -138,6 +143,8 @@ def _add_shared_templates(records: RecordStore) -> None:
 
 
 def _rename_refund_bundle(case: CaseState, records: RecordStore, suffix: str) -> tuple[CaseState, RecordStore]:
+    if not (records.customers and records.orders and records.shipping and records.payments and records.disputes):
+        raise ValueError(f"Incomplete refund bundle for rename (suffix={suffix})")
     customer = next(iter(records.customers.values()))
     order = next(iter(records.orders.values()))
     shipping = next(iter(records.shipping.values()))

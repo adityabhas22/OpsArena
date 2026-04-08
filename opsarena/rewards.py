@@ -92,6 +92,7 @@ class EpisodeMetricsProto(Protocol):
     cases_resolved: int
     cases_breached: int
     chargebacks: int
+    fraudulent_approvals: int
     compliance_violations: int
 
 
@@ -421,8 +422,8 @@ class KYCRewardParams:
     # Risk tier multipliers
     high_risk_multiplier: float = 2.0         # double penalties for high-risk tier
     low_risk_multiplier: float = 0.5          # halve for low-risk
-    # False positive/negative asymmetry ratio
-    fn_fp_ratio: float = 50.0                 # false negative is 50x worse
+    # False positive/negative asymmetry ratio (reserved for future use)
+    fn_fp_ratio: float = 50.0
 
 
 def compute_kyc_reward(
@@ -813,7 +814,7 @@ class VOIParams:
     """Parameters for Value of Information reward."""
     alpha: float = 2.0               # max marginal VOI reward
     beta: float = 0.05               # time cost per minute
-    gamma: float = -1.0              # redundant query penalty
+    gamma: float = -1.0              # reserved — redundancy uses redundancy_penalty instead
     base_confidence: float = 0.3     # confidence with zero evidence
     max_evidence_reward: float = 5.0  # cap total evidence reward per case
     redundancy_penalty: float = -1.0  # penalty for re-gathering same evidence
@@ -878,11 +879,12 @@ def decision_confidence(
     Uses a geometric model: each evidence item reduces remaining
     uncertainty by a fixed fraction.
 
-    confidence(k) = 1 - (1 - base)^(1 + k * available_ratio)
+    confidence(k) = 1 - (1 - base)^(1 + 3 * ratio)
 
-    This gives:
+    where ratio = items_gathered / items_available.
+
     - k=0: confidence = base (e.g., 0.3)
-    - k=available: confidence approaches 1.0
+    - k=available: confidence ≈ 1 - (1-base)^4 ≈ 0.76 for base=0.3
     - Diminishing returns: each additional item helps less
     """
     if items_available <= 0:
@@ -1730,8 +1732,9 @@ def compute_step_reward(
 
     if action_type == "approve" and case.case_type == CaseType.REFUND:
         if float(_hidden(case, "true_fraud_risk", 0.0)) > 0.5:
+            fraud_count = getattr(episode_metrics, "fraudulent_approvals", episode_metrics.chargebacks)
             result.cascade_rewards["fraud_rate"] = compute_fraud_cascade(
-                cumulative_fraud_approvals=episode_metrics.chargebacks + 1,
+                cumulative_fraud_approvals=fraud_count + 1,
                 total_decisions=episode_metrics.cases_resolved + 1,
             )
 
@@ -1945,22 +1948,15 @@ def compute_shaping_reward(
 # ============================================================================
 
 def validate_reward_against_pathological_policies(
-    reward_fn,
-    scenarios: list[dict],
+    reward_fn: Any = None,
+    scenarios: list[dict] | None = None,
 ) -> dict[str, Any]:
     """
-    Test reward function against four pathological policies.
+    Return expected ranking of pathological policies for reward validation.
 
-    A well-designed reward should satisfy:
-    1. always_approve should score POORLY (misses fraud/duplicates)
-    2. always_escalate should score POORLY (overloads human queue)
-    3. always_gather_info should score POORLY (never resolves, SLA breach)
-    4. greedy_closer should score MODERATELY (fast but error-prone)
-    5. A reasonable policy should score BEST
-
-    This function returns scores for each policy so developers can
-    verify the reward design doesn't accidentally incentivize degenerate
-    behavior.
+    This is a specification stub — actual simulation should be run in the
+    test suite against concrete scenarios. The returned dict documents
+    the expected ordering a well-calibrated reward function should produce.
     """
     results: dict[str, Any] = {
         "description": (

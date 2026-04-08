@@ -35,6 +35,7 @@ class EpisodeMetrics(BaseModel):
     cascading_events_triggered: int = 0
     reopens: int = 0
     chargebacks: int = 0
+    fraudulent_approvals: int = 0
     duplicate_payments: int = 0
     compliance_violations: int = 0
     invalid_actions: int = 0

@@ -29,7 +29,10 @@ def _verification_record(state: WorldState, case):
     verification_id = linked_record_id(case, RecordType.KYC_DOCUMENT)
     if verification_id is None:
         raise ValueError("kyc_record_missing")
-    return state.records.kyc_verifications[verification_id]
+    record = state.records.kyc_verifications.get(verification_id)
+    if record is None:
+        raise ValueError(f"kyc_verification_not_found:{verification_id}")
+    return record
 
 
 def handle_review_kyc(state: WorldState, action: ReviewKYCAction):

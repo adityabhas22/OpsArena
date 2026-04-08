@@ -22,10 +22,11 @@ def _compliance_penalty(state: WorldState) -> float:
     return max(0.1, 1.0 - 0.3 * state.metrics.compliance_violations)
 
 
-def _case_outcome_score(case) -> float:
+def _case_outcome_score(case) -> float:  # noqa: C901
     if case.case_type == CaseType.REFUND:
         workflow = case.workflow
-        assert isinstance(workflow, RefundWorkflowState)
+        if not isinstance(workflow, RefundWorkflowState):
+            return 0.0
         if workflow.pre_dispute_type.value != "none" or workflow.dispute_stage != DisputeStage.CHARGEBACK_OPEN:
             if case.hidden.true_dispute_should_accept:
                 return 1.0 if case.resolution == Resolution.APPROVED and case.status == "closed" else 0.0
@@ -36,13 +37,15 @@ def _case_outcome_score(case) -> float:
         expected = Resolution.REJECTED if case.hidden.true_fraud_risk > 0.7 else Resolution.APPROVED
     elif case.case_type == CaseType.INVOICE:
         workflow = case.workflow
-        assert isinstance(workflow, InvoiceWorkflowState)
+        if not isinstance(workflow, InvoiceWorkflowState):
+            return 0.0
         if workflow.credit_memo_status in {CreditMemoStatus.RECEIVED, CreditMemoStatus.APPLIED}:
             return 1.0 if case.resolution == Resolution.APPROVED and case.status == "closed" else 0.0
         expected = Resolution.REJECTED if case.hidden.true_is_duplicate else Resolution.APPROVED
     else:
         workflow = case.workflow
-        assert isinstance(workflow, KYCWorkflowState)
+        if not isinstance(workflow, KYCWorkflowState):
+            return 0.0
         if case.hidden.true_sanctions_match:
             expected = Resolution.REJECTED
         elif not case.hidden.true_doc_valid:
@@ -141,14 +144,16 @@ def grade_trajectory(state: WorldState) -> float:
         ):
             checks["stop_payment_discipline"] = 0.0
     if state.metrics.invalid_actions > 0:
-        cases = max(1, len(state.cases))
-        checks["invalid_action_discipline"] = max(0.0, 1.0 - state.metrics.invalid_actions / (cases * 2))
+        case_count = max(1, len(state.cases))
+        checks["invalid_action_discipline"] = max(0.0, 1.0 - state.metrics.invalid_actions / (case_count * 2))
     return sum(checks.values()) / len(checks)
 
 
 def _kendall_tau(order: list[str], optimal_order: list[str]) -> float:
-    if len(order) < 2 or len(order) != len(optimal_order):
+    if len(order) < 2:
         return 1.0
+    if set(order) != set(optimal_order):
+        return 0.0
     concordant = 0
     discordant = 0
     index = {case_id: idx for idx, case_id in enumerate(optimal_order)}
