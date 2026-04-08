@@ -36,6 +36,11 @@ docs/_build/
 .idea/
 *.iml
 
+# Local environment files
+.env
+.env.*
+!.env.example
+
 # Project-specific
 artifacts/
 data/

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, get_args, get_origin
 
-from .models import OPS_ACTION_ADAPTER
+from .models import OpsAction
 
 
 def _schema_to_properties(schema: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -24,7 +24,7 @@ def _schema_to_properties(schema: dict[str, Any]) -> tuple[dict[str, Any], list[
 
 
 def iter_action_models() -> list[type]:
-    annotated = OPS_ACTION_ADAPTER.annotation
+    annotated = OpsAction
     inner = get_args(annotated)[0]
     if get_origin(inner) is None:
         return [inner]

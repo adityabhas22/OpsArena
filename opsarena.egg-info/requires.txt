@@ -9,5 +9,9 @@ pytest>=8.0
 [train]
 accelerate>=1.10
 datasets>=4.0
+jmespath>=1.0
 peft>=0.17
 trl>=0.23.1
+
+[train-vllm]
+vllm>=0.8
