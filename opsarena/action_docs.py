@@ -5,6 +5,14 @@ from typing import Any, get_args, get_origin
 from .models import OPS_ACTION_ADAPTER
 
 
+_PASSTHROUGH_KEYS = {
+    "type", "description", "enum", "anyOf", "items",
+    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
+    "minItems", "maxItems", "minLength", "maxLength",
+    "default", "additionalProperties",
+}
+
+
 def _schema_to_properties(schema: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     properties = schema.get("properties", {})
     required = schema.get("required", [])
@@ -12,19 +20,19 @@ def _schema_to_properties(schema: dict[str, Any]) -> tuple[dict[str, Any], list[
     for name, prop in properties.items():
         if name == "metadata":
             continue
-        cleaned[name] = {
+        entry: dict[str, Any] = {
             "type": prop.get("type", "string"),
             "description": prop.get("description", ""),
         }
-        if "enum" in prop:
-            cleaned[name]["enum"] = prop["enum"]
-        if "anyOf" in prop:
-            cleaned[name]["anyOf"] = prop["anyOf"]
+        for key in _PASSTHROUGH_KEYS - {"type", "description"}:
+            if key in prop:
+                entry[key] = prop[key]
+        cleaned[name] = entry
     return cleaned, [item for item in required if item != "metadata"]
 
 
 def iter_action_models() -> list[type]:
-    annotated = OPS_ACTION_ADAPTER.annotation
+    annotated = getattr(OPS_ACTION_ADAPTER, "annotation", None) or getattr(OPS_ACTION_ADAPTER, "_type")
     inner = get_args(annotated)[0]
     if get_origin(inner) is None:
         return [inner]

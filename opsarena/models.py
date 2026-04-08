@@ -63,7 +63,13 @@ class CaseDetail(BaseModel):
     checks_completed: list[str] = Field(default_factory=list)
     communication_log: list[MessageSummary] = Field(default_factory=list)
     internal_notes: list[str] = Field(default_factory=list)
+    requested_info_fields: list[str] = Field(default_factory=list)
     current_owner: str = ""
+    case_phase: str = ""
+    close_blockers: list[str] = Field(default_factory=list)
+    waiting_on: list[str] = Field(default_factory=list)
+    next_due_minutes: int | None = None
+    recommended_action_categories: list[str] = Field(default_factory=list)
     workflow_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -197,11 +203,12 @@ class InspectAuditAction(Action):
 
 
 class ApproveAction(Action):
+    """Approve a case. Requires prior policy query and record review."""
     action_type: Literal["approve"] = "approve"
     case_id: str
-    decision_code: DecisionCode = DecisionCode.STANDARD_APPROVAL
-    approved_amount: float | None = None
-    notes: str | None = None
+    decision_code: DecisionCode = Field(default=DecisionCode.STANDARD_APPROVAL, description="'standard_approval', 'exception_approval', or 'partial_approval'")
+    approved_amount: float | None = Field(default=None, description="Required for partial_approval; the approved dollar amount")
+    notes: str | None = Field(default=None, description="Justification for the approval decision")
 
     @model_validator(mode="after")
     def validate_partial(self) -> "ApproveAction":
@@ -269,10 +276,19 @@ class RouteCaseAction(Action):
 
 
 class SendMessageAction(Action):
+    """Send a templated message to the customer. Requires template-specific slot values."""
     action_type: Literal["send_message"] = "send_message"
     case_id: str
-    template_id: str
-    slots: dict[str, str] = Field(default_factory=dict)
+    template_id: str = Field(description="Template to use: 'refund_approved', 'case_closed', or 'info_request'")
+    slots: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Template variable key-value pairs. "
+            "refund_approved needs: {\"amount\": \"...\", \"order_id\": \"...\"}. "
+            "case_closed needs: {\"case_id\": \"...\", \"resolution\": \"...\"}. "
+            "info_request needs: {\"fields\": \"...\"}."
+        ),
+    )
 
 
 class LogInternalNoteAction(Action):
@@ -312,9 +328,10 @@ class ResumeSLAAction(Action):
 
 
 class ExecuteRefundAction(Action):
+    """Execute the approved refund payment back to the customer."""
     action_type: Literal["execute_refund"] = "execute_refund"
     case_id: str
-    approved_amount: float | None = Field(default=None, gt=0)
+    approved_amount: float | None = Field(default=None, gt=0, description="Refund amount in dollars")
     notes: str | None = None
 
 
@@ -374,10 +391,11 @@ class SendForSecondaryApprovalAction(Action):
 
 
 class ReviewKYCAction(Action):
+    """Submit KYC verification decision after reviewing documents and running checks."""
     action_type: Literal["review_kyc"] = "review_kyc"
     case_id: str
-    verification_decision: VerificationDecision
-    notes: str | None = None
+    verification_decision: VerificationDecision = Field(description="'approve', 'request_resubmission', or 'reject'")
+    notes: str | None = Field(default=None, description="Justification for the KYC decision")
 
 
 class TriggerReverificationAction(Action):
@@ -582,9 +600,10 @@ class AdvanceClockAction(Action):
 
 
 class CloseCaseAction(Action):
+    """Close a case. All close_blockers must be resolved first."""
     action_type: Literal["close_case"] = "close_case"
     case_id: str
-    resolution_code: str
+    resolution_code: str = Field(description="Usually 'completed'")
 
 
 class ReopenCaseAction(Action):
@@ -664,6 +683,21 @@ OpsAction = Annotated[
 OPS_ACTION_ADAPTER = TypeAdapter(OpsAction)
 
 
+def _build_action_field_map() -> dict[str, set[str]]:
+    from opsarena.action_docs import iter_action_models
+    return {
+        model.model_fields["action_type"].default: set(model.model_fields.keys())
+        for model in iter_action_models()
+    }
+
+
+_ACTION_ACCEPTED_FIELDS = _build_action_field_map()
+
+
 def validate_ops_action(action: Action | dict[str, Any]) -> OpsAction:
     payload = action.model_dump(exclude_none=True) if isinstance(action, Action) else action
+    action_type = payload.get("action_type")
+    accepted = _ACTION_ACCEPTED_FIELDS.get(action_type)
+    if accepted:
+        payload = {k: v for k, v in payload.items() if k in accepted}
     return OPS_ACTION_ADAPTER.validate_python(payload)

@@ -126,6 +126,13 @@ def handle_log_internal_note(state: WorldState, action: LogInternalNoteAction):
 def handle_send_message(state: WorldState, action: SendMessageAction):
     case = require_case(state, action.case_id)
     template = state.records.message_templates[action.template_id]
+    missing = [s for s in template.required_slots if s not in action.slots]
+    if missing:
+        raise ValueError(
+            f"Missing required slots for template '{action.template_id}': "
+            f"{', '.join(missing)}. "
+            f"Pass slots={{{', '.join(repr(s) + ': ...' for s in template.required_slots)}}}"
+        )
     body = template.body_template.format(**action.slots)
     case.communication_log.append(
         MessageLogEntry(
