@@ -83,7 +83,7 @@ def handle_open_case(state: WorldState, action: OpenCaseAction):
 
 
 def handle_view_record(state: WorldState, action: ViewRecordAction):
-    case = state.cases[state.current_case_id] if state.current_case_id else None
+    case = state.cases.get(state.current_case_id) if state.current_case_id else None
     if case and action.record_type in case.hidden.forbidden_record_types:
         state.metrics.data_breach_count += 1
         raise ValueError("forbidden_record_access")
@@ -95,8 +95,10 @@ def handle_view_record(state: WorldState, action: ViewRecordAction):
 
 
 def handle_query_policy(state: WorldState, action: QueryPolicyAction):
-    case = state.cases[state.current_case_id] if state.current_case_id else None
-    policy = state.records.policies[action.policy_id]
+    case = state.cases.get(state.current_case_id) if state.current_case_id else None
+    policy = state.records.policies.get(action.policy_id)
+    if policy is None:
+        raise ValueError(f"unknown_policy:{action.policy_id}")
     context = {
         "refund_amount": case.amount if case else 0,
         "invoice_total": case.amount if case else 0,
@@ -145,7 +147,9 @@ def _auto_fill_slots(case, template_id: str, provided: dict[str, str]) -> dict[s
 
 def handle_send_message(state: WorldState, action: SendMessageAction):
     case = require_case(state, action.case_id)
-    template = state.records.message_templates[action.template_id]
+    template = state.records.message_templates.get(action.template_id)
+    if template is None:
+        raise ValueError(f"unknown_template:{action.template_id}")
     slots = _auto_fill_slots(case, action.template_id, action.slots)
     body = template.body_template.format(**slots)
     case.communication_log.append(

@@ -220,7 +220,9 @@ def _recommended_action_categories(case: CaseState, close_blockers: list[str], w
 def render_queue_view(state: WorldState) -> list[QueueItem]:
     items: list[QueueItem] = []
     for case_id in state.queue_order:
-        case = state.cases[case_id]
+        case = state.cases.get(case_id)
+        if case is None:
+            continue
         if case.status == "closed":
             continue
         customer_name = None
@@ -324,7 +326,10 @@ def render_record_view(state: WorldState) -> dict | None:
 def render_policy_result(state: WorldState) -> PolicyResult | None:
     if not state.current_policy_id:
         return None
-    policy = state.records.policies[state.current_policy_id]
+    policy = state.records.policies.get(state.current_policy_id)
+    if policy is None:
+        state.current_policy_id = None
+        return None
     if state.current_clause_id is None:
         description = "\n".join(clause.description for clause in policy.clauses[:3])
         actions = [action.action_type for clause in policy.clauses for action in clause.actions]
@@ -334,7 +339,15 @@ def render_policy_result(state: WorldState) -> PolicyResult | None:
             description=description,
             matched_actions=actions[:5],
         )
-    clause = next(clause for clause in policy.clauses if clause.clause_id == state.current_clause_id)
+    clause = next((c for c in policy.clauses if c.clause_id == state.current_clause_id), None)
+    if clause is None:
+        state.current_clause_id = None
+        return PolicyResult(
+            policy_id=policy.policy_id,
+            title=policy.title,
+            description="\n".join(c.description for c in policy.clauses[:3]),
+            matched_actions=[a.action_type for c in policy.clauses for a in c.actions][:5],
+        )
     return PolicyResult(
         policy_id=policy.policy_id,
         clause_id=clause.clause_id,
