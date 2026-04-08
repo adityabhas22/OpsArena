@@ -120,5 +120,7 @@ def available_actions_for_case(case: CaseState) -> list[str]:
 
 def available_actions(state: WorldState) -> list[str]:
     if state.current_case_id and state.current_case_id in state.cases:
-        return sorted(set(QUEUE_ACTIONS + available_actions_for_case(state.cases[state.current_case_id])))
+        current_case = state.cases[state.current_case_id]
+        if current_case.status != "closed":
+            return sorted(set(QUEUE_ACTIONS + available_actions_for_case(current_case)))
     return QUEUE_ACTIONS + ["open_case"]

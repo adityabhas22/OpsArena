@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "High-fidelity ecommerce operations OpenEnv environment"
 requires-python = ">=3.11"
 dependencies = [
+  "openai>=2.30",
   "openenv-core>=0.2.3",
   "pydantic>=2.10",
   "pyyaml>=6.0",

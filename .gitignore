@@ -8,6 +8,7 @@ uv.lock
 .venv/
 env/
 ENV/
+.env
 
 # Python artifacts
 __pycache__/
@@ -43,4 +44,3 @@ temp/
 *.db
 *.sqlite
 *.sqlite3
-

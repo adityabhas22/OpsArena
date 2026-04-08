@@ -120,7 +120,7 @@ def apply_action(state: WorldState, action: OpsAction) -> TransitionResult:
         state.last_action_result = message
         return TransitionResult(
             success=False,
-            message=message.replace("_", " "),
+            message=message,
             objective_reward=0.0,
             train_reward=-0.05,
             error_code="invalid_action",
